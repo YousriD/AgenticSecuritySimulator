@@ -1,0 +1,12 @@
+{
+  "id": "S1",
+  "name": "Zero-day exploitation",
+  "description": "Unpatched edge service exploited before signatures exist.",
+  "criticalityWeight": 1.0,
+  "mitreTechniques": ["T1190", "T1068", "T1021"],
+  "steps": [
+    { "techniqueId": "T1190", "actor": "red", "targetTypes": ["CloudApp", "Server"], "outcome": "foothold" },
+    { "techniqueId": "T1068", "actor": "red", "targetTypes": ["Server"], "outcome": "privilege_escalation" },
+    { "techniqueId": "T1021", "actor": "red", "targetTypes": ["Server", "Workstation"], "outcome": "lateral_movement" }
+  ]
+}

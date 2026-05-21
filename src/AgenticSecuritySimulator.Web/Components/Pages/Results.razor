@@ -1,0 +1,113 @@
+@page "/results"
+@rendermode InteractiveServer
+@inject SimulationService Sims
+@inject AppState State
+@using System.Text.Json
+
+<PageTitle>Results</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Resilience results</MudText>
+
+@if (State.LastBatchId is not Guid batchId)
+{
+    <MudAlert Severity="Severity.Info">Run a simulation from the <MudLink Href="/scenarios">Scenarios</MudLink> page.</MudAlert>
+}
+else if (_batch is null)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    var stats = _batch.Statistics;
+    <MudGrid>
+        <MudItem xs="12" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.overline">Mean R</MudText>
+                <MudText Typo="Typo.h3">@stats?.MeanScore</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.overline">P10</MudText>
+                <MudText Typo="Typo.h4">@stats?.P10Score</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.overline">P90</MudText>
+                <MudText Typo="Typo.h4">@stats?.P90Score</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="3">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.overline">Weakest dimension</MudText>
+                <MudText Typo="Typo.h5">@stats?.WeakestDimension</MudText>
+                <MudText Typo="Typo.caption">@stats?.WeakestDimensionPct% of runs</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.h6" Class="mt-4">Score distribution (@_totalRuns runs)</MudText>
+    @if (_chartSeries.Count > 0)
+    {
+        <MudChart ChartType="ChartType.Bar" ChartSeries="@_chartSeries" x-axis-labels="@_chartLabels" Width="100%" Height="280px" />
+    }
+
+    <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary" Href="/replay">View replay</MudButton>
+}
+
+@code {
+    private AgenticSecuritySimulator.Core.Entities.SimulationBatch? _batch;
+    private List<ChartSeries<double>> _chartSeries = [];
+    private string[] _chartLabels = [];
+    private int _totalRuns;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (State.LastBatchId is Guid batchId)
+        {
+            _batch = await Sims.GetBatchAsync(batchId);
+            _totalRuns = _batch?.RunCount ?? 0;
+            var scores = ExtractScores(_batch);
+            if (scores.Count > 0)
+                BuildChart(scores);
+        }
+    }
+
+    private static List<decimal> ExtractScores(AgenticSecuritySimulator.Core.Entities.SimulationBatch? batch)
+    {
+        if (batch?.Statistics?.StatsJson is not { } json)
+            return batch?.Runs.Select(r => r.ResilienceScore ?? 0).ToList() ?? [];
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("Scores", out var arr))
+                return arr.EnumerateArray().Select(e => e.GetDecimal()).ToList();
+        }
+        catch { }
+
+        return batch.Runs.Select(r => r.ResilienceScore ?? 0).ToList();
+    }
+
+    private void BuildChart(List<decimal> scores)
+    {
+        var buckets = new[] { "0-20", "21-40", "41-60", "61-80", "81-100" };
+        var counts = new int[5];
+        foreach (var score in scores)
+        {
+            var idx = score switch
+            {
+                <= 20 => 0,
+                <= 40 => 1,
+                <= 60 => 2,
+                <= 80 => 3,
+                _ => 4
+            };
+            counts[idx]++;
+        }
+
+        _chartLabels = buckets;
+        _chartSeries = [new ChartSeries<double> { Name = "Runs", Data = counts.Select(c => (double)c).ToArray() }];
+    }
+}

@@ -1,0 +1,216 @@
+@page "/scenarios"
+@rendermode InteractiveServer
+@inject SimulationService Sims
+@inject AppState State
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@inject ILogger<Scenarios> Logger
+
+<PageTitle>Scenarios</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Attack catalogue &amp; run configuration</MudText>
+
+@if (_loadingTwin)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (State.CurrentTwinId is not Guid)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">
+        No twin loaded. <MudLink Href="/upload">Upload a twin</MudLink> or load the company sample from Home.
+    </MudAlert>
+    <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="TryLoadLatestTwin">Use most recently imported twin</MudButton>
+}
+else if (_scenarios.Count == 0)
+{
+    <MudAlert Severity="Severity.Error">No attack scenarios found. Check that <code>data/scenarios/*.json</code> exists in the project.</MudAlert>
+}
+else
+{
+    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
+        Twin ready — <MudLink Href="/topology">view topology</MudLink>
+    </MudAlert>
+
+    @if (!string.IsNullOrEmpty(_status))
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-3">@_status</MudAlert>
+    }
+
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudText Typo="Typo.h6" Class="mb-2">Top 5 scenarios (@SelectedCount selected)</MudText>
+            <MudStack Spacing="1">
+                @foreach (var item in _scenarioItems)
+                {
+                    <MudPaper Class="pa-2" Elevation="0" Outlined="true">
+                        <MudSwitch @bind-Value="item.Selected" Color="Color.Error"
+                                   Label="@($"{item.Definition.Id}: {item.Definition.Name}")"
+                                   Disabled="_busy" />
+                        <MudText Typo="Typo.caption" Class="ml-12">@item.Definition.Description</MudText>
+                    </MudPaper>
+                }
+            </MudStack>
+            <MudStack Row="true" Spacing="1" Class="mt-2">
+                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="SelectAll" Disabled="_busy">Select all</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="SelectNone" Disabled="_busy">Clear</MudButton>
+            </MudStack>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudText Typo="Typo.h6" Class="mb-2">Run settings</MudText>
+            <MudButtonGroup Variant="Variant.Outlined" Class="mb-2" Disabled="_busy">
+                <MudButton OnClick="@(() => SetRunCount(100))" Variant="@(_runCount == 100 ? Variant.Filled : Variant.Outlined)">100 (fast)</MudButton>
+                <MudButton OnClick="@(() => SetRunCount(500))" Variant="@(_runCount == 500 ? Variant.Filled : Variant.Outlined)">500</MudButton>
+                <MudButton OnClick="@(() => SetRunCount(1000))" Variant="@(_runCount == 1000 ? Variant.Filled : Variant.Outlined)">1000</MudButton>
+            </MudButtonGroup>
+            <MudSlider T="decimal" @bind-Value="_edr" Min="0m" Max="1m" Step="0.05m" Color="Color.Primary" Class="mt-4" Disabled="_busy">
+                EDR effectiveness: @_edr.ToString("P0")
+            </MudSlider>
+            <MudNumericField @bind-Value="_backupRpo" Label="Backup RPO (hours)" Min="1" Max="168" Class="mt-2" Disabled="_busy" />
+            <MudNumericField @bind-Value="_patchLag" Label="Patch lag (days)" Min="0" Max="365" Class="mt-2" Disabled="_busy" />
+
+            <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Error"
+                       ButtonType="ButtonType.Button"
+                       OnClick="RunSimulationAsync"
+                       Disabled="_busy" FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.PlayArrow">
+                @if (_busy)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>@_status</span>
+                }
+                else
+                {
+                    <span>Run Monte Carlo batch</span>
+                }
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private IReadOnlyList<ScenarioDefinition> _scenarios = [];
+    private List<ScenarioSelection> _scenarioItems = [];
+    private int _runCount = 100;
+    private decimal _edr = 0.6m;
+    private int _backupRpo = 24;
+    private int _patchLag = 30;
+    private bool _busy;
+    private bool _loadingTwin;
+    private string _status = "";
+
+    private int SelectedCount => _scenarioItems.Count(i => i.Selected);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _scenarios = await Sims.GetScenariosAsync();
+        _scenarioItems = _scenarios.Select(s => new ScenarioSelection { Definition = s, Selected = true }).ToList();
+        _runCount = Config.GetValue("Simulation:DefaultRunCount", 100);
+        if (_runCount > 1000) _runCount = 1000;
+        _edr = State.SuggestedParameters.EdrEffectiveness;
+        _backupRpo = State.SuggestedParameters.BackupRpoHours;
+        _patchLag = State.SuggestedParameters.PatchLagDays;
+
+        if (State.CurrentTwinId is null)
+            await TryLoadLatestTwin();
+    }
+
+    private void SetRunCount(int count)
+    {
+        _runCount = count;
+    }
+
+    private async Task TryLoadLatestTwin()
+    {
+        _loadingTwin = true;
+        try
+        {
+            var latest = await Sims.GetLatestTwinIdAsync();
+            if (latest.HasValue)
+            {
+                State.CurrentTwinId = latest.Value;
+                Snackbar.Add("Loaded latest twin.", Severity.Info);
+            }
+        }
+        finally
+        {
+            _loadingTwin = false;
+        }
+    }
+
+    private void SelectAll()
+    {
+        foreach (var item in _scenarioItems)
+            item.Selected = true;
+    }
+
+    private void SelectNone()
+    {
+        foreach (var item in _scenarioItems)
+            item.Selected = false;
+    }
+
+    private async Task RunSimulationAsync()
+    {
+        if (State.CurrentTwinId is not Guid twinId)
+        {
+            Snackbar.Add("No twin loaded.", Severity.Warning);
+            return;
+        }
+
+        var selected = _scenarioItems.Where(i => i.Selected).Select(i => i.Definition.Id).ToList();
+        if (selected.Count == 0)
+        {
+            Snackbar.Add("Select at least one scenario.", Severity.Warning);
+            return;
+        }
+
+        _busy = true;
+        _status = "Starting…";
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var progress = new Progress<string>(async msg =>
+            {
+                _status = msg;
+                try { await InvokeAsync(StateHasChanged); }
+                catch (ObjectDisposedException) { /* circuit closed */ }
+            });
+
+            var parameters = new SimulationParameters
+            {
+                EdrEffectiveness = _edr,
+                BackupRpoHours = _backupRpo,
+                PatchLagDays = _patchLag
+            };
+
+            var seed = Config.GetValue("Simulation:DefaultSeed", 42);
+            var batch = await Sims.RunBatchAsync(twinId, selected, parameters, _runCount, seed, progress);
+            State.LastBatchId = batch.Id;
+            Snackbar.Add($"Complete — mean R = {batch.Statistics?.MeanScore}", Severity.Success);
+            Nav.NavigateTo("/results");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Simulation batch failed");
+            _status = $"Failed: {ex.Message}";
+            Snackbar.Add($"Simulation failed: {ex.Message}", Severity.Error);
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            _busy = false;
+            if (!_status.StartsWith("Failed"))
+                _status = "";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private sealed class ScenarioSelection
+    {
+        public ScenarioDefinition Definition { get; init; } = null!;
+        public bool Selected { get; set; }
+    }
+}

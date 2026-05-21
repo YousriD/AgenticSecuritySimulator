@@ -1,0 +1,13 @@
+{
+  "id": "S2",
+  "name": "Ransomware",
+  "description": "Phish to foothold, spread, encrypt crown jewels.",
+  "criticalityWeight": 1.0,
+  "mitreTechniques": ["T1566", "T1059", "T1021", "T1486"],
+  "steps": [
+    { "techniqueId": "T1566", "actor": "red", "targetTypes": ["Workstation"], "outcome": "foothold" },
+    { "techniqueId": "T1059", "actor": "red", "targetTypes": ["Workstation", "Server"], "outcome": "execution" },
+    { "techniqueId": "T1021", "actor": "red", "targetTypes": ["Server"], "outcome": "lateral_movement" },
+    { "techniqueId": "T1486", "actor": "red", "targetTypes": ["Server"], "outcome": "impact" }
+  ]
+}

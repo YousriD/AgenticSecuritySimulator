@@ -1,0 +1,12 @@
+{
+  "id": "S4",
+  "name": "Supply chain compromise",
+  "description": "Malicious build poisons CI/CD and deploys to production API.",
+  "criticalityWeight": 0.95,
+  "mitreTechniques": ["T1195", "T1078", "T1021"],
+  "steps": [
+    { "techniqueId": "T1195", "actor": "red", "targetTypes": ["Server"], "outcome": "foothold" },
+    { "techniqueId": "T1078", "actor": "red", "targetTypes": ["Server", "CloudApp"], "outcome": "persistence" },
+    { "techniqueId": "T1021", "actor": "red", "targetTypes": ["CloudApp"], "outcome": "deploy_impact" }
+  ]
+}

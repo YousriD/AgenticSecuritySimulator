@@ -1,0 +1,12 @@
+{
+  "id": "S5",
+  "name": "Insider data exfiltration",
+  "description": "Legitimate access with abnormal data movement.",
+  "criticalityWeight": 0.85,
+  "mitreTechniques": ["T1078", "T1005", "T1048"],
+  "steps": [
+    { "techniqueId": "T1078", "actor": "red", "targetTypes": ["Workstation", "Server"], "outcome": "foothold" },
+    { "techniqueId": "T1005", "actor": "red", "targetTypes": ["Server"], "outcome": "collection" },
+    { "techniqueId": "T1048", "actor": "red", "targetTypes": ["Server", "CloudApp"], "outcome": "exfiltration" }
+  ]
+}

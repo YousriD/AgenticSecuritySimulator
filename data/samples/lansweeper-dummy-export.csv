@@ -1,0 +1,11 @@
+AssetName,AssetType,IPAddress,FQDN,Domain,OU,OS,Manufacturer,Model,MACAddress,Department,Site,LastPatched,State,CriticalityTag
+DC01,Server,10.10.0.10,dc01.corp.contoso.com,corp.contoso.com,"OU=Domain Controllers,DC=corp,DC=contoso,DC=com",Windows Server 2022,Microsoft,Virtual Machine,00-15-5D-01-01-01,IT,HQ-Unreachable,2026-04-01,Active,Crown-Jewel
+SRV-PAYROLL,Server,10.10.20.15,payroll.corp.contoso.com,corp.contoso.com,"OU=Finance,DC=corp,DC=contoso,DC=com",Windows Server 2019,Microsoft,Virtual Machine,00-15-5D-02-02-02,Finance,HQ-Unreachable,2026-03-15,Active,Crown-Jewel
+SRV-FILE01,Server,10.10.20.20,file01.corp.contoso.com,corp.contoso.com,"OU=File Services,DC=corp,DC=contoso,DC=com",Windows Server 2022,Microsoft,Virtual Machine,00-15-5D-02-02-03,Finance,HQ-Unreachable,2026-05-01,Active,High
+WS-FIN-042,Workstation,10.10.30.142,ws-fin-042.corp.contoso.com,corp.contoso.com,"OU=Finance Users,DC=corp,DC=contoso,DC=com",Windows 11 23H2,Dell,OptiPlex,AA-BB-CC-DD-EE-01,Finance,HQ-Unreachable,2026-05-10,Active,Medium
+WS-ENG-017,Workstation,10.10.40.17,ws-eng-017.corp.contoso.com,corp.contoso.com,"OU=Engineering,DC=corp,DC=contoso,DC=com",Windows 11 23H2,Lenovo,ThinkPad,AA-BB-CC-DD-EE-02,Engineering,HQ-Unreachable,2026-05-12,Active,Medium
+SRV-DEVOPS,Server,10.10.40.50,devops.corp.contoso.com,corp.contoso.com,"OU=Engineering,DC=corp,DC=contoso,DC=com",Ubuntu 22.04,Microsoft,Virtual Machine,00-15-5D-03-03-03,Engineering,HQ-Unreachable,2026-04-20,Active,High
+SRV-CICD,Server,10.10.40.55,cicd.corp.contoso.com,corp.contoso.com,"OU=Engineering,DC=corp,DC=contoso,DC=com",Linux,Microsoft,Virtual Machine,00-15-5D-03-03-04,Engineering,HQ-Unreachable,2026-04-25,Active,High
+AZ-APP-PAYAPI,CloudApp,,pay-api.azurewebsites.net,corp.contoso.com,,Azure App Service,Microsoft,PaaS,,Engineering,Azure-East,2026-05-01,Active,Crown-Jewel
+FW-PERIM,Network,10.10.0.1,gw.corp.contoso.com,corp.contoso.com,,FortiOS 7.4,Fortinet,FortiGate,,IT,HQ-Unreachable,,Active,High
+ENTRA-ID,Identity,,login.microsoftonline.com,corp.contoso.com,,Entra ID,Microsoft,SaaS,,IT,Cloud,,Active,Crown-Jewel

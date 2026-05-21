@@ -1,0 +1,232 @@
+@page "/upload"
+@rendermode InteractiveServer
+@inject TwinImportService Importer
+@inject AppState State
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Upload Twin</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Upload infrastructure twin</MudText>
+<MudText Typo="Typo.body2" Class="mb-4">
+    Supports Lansweeper exports, unified digital-twin CSVs (devices, servers, network, links, controls), or any CSV with hostname/device columns.
+</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="5">
+        <MudTabs>
+            <MudTabPanel Text="Your CSV">
+                <InputFile OnChange="OnFileSelected" accept=".csv" class="mt-2" />
+                <MudText Typo="Typo.caption">Max 5 MB</MudText>
+            </MudTabPanel>
+            <MudTabPanel Text="Samples">
+                <MudStack Spacing="2" Class="mt-2">
+                    <MudButton Variant="Variant.Outlined" OnClick="ImportCompanyTwin" Disabled="_busy">
+                        Company twin (335 rows)
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="ImportSample" Disabled="_busy">
+                        Contoso Lansweeper sample
+                    </MudButton>
+                </MudStack>
+            </MudTabPanel>
+        </MudTabs>
+
+        <MudTextField @bind-Value="_orgName" Label="Organization" Class="mt-4" />
+        <MudTextField @bind-Value="_twinName" Label="Twin name" Class="mt-2" />
+
+        @if (_parseResult is not null)
+        {
+            <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Success" OnClick="ImportCsv" Disabled="_busy" FullWidth="true">
+                Import @_parseResult.Assets.Count assets into twin
+            </MudButton>
+        }
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        @if (_parseResult is null)
+        {
+            <MudAlert Severity="Severity.Info">Select a CSV to analyze column mappings and row breakdown before import.</MudAlert>
+        }
+        else
+        {
+            <MudPaper Class="pa-4">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudChip T="string" Color="Color.Primary">@_parseResult.Report.DetectedFormat</MudChip>
+                    @if (!string.IsNullOrEmpty(_parseResult.Report.OrganizationHint))
+                    {
+                        <MudText Typo="Typo.caption">Org hint: @_parseResult.Report.OrganizationHint</MudText>
+                    }
+                </MudStack>
+
+                <MudText Typo="Typo.subtitle2" Class="mt-3">Detected sections</MudText>
+                <MudSimpleTable Dense="true" Hover="true">
+                    <tbody>
+                    @foreach (var row in _parseResult.Report.RowCountsBySection.OrderByDescending(r => r.Value))
+                    {
+                        <tr>
+                            <td>@row.Key</td>
+                            <td><strong>@row.Value</strong></td>
+                        </tr>
+                    }
+                    </tbody>
+                </MudSimpleTable>
+
+                <MudGrid Class="mt-2">
+                    <MudItem xs="4">
+                        <MudText Typo="Typo.caption">Assets</MudText>
+                        <MudText Typo="Typo.h6">@_parseResult.Assets.Count</MudText>
+                    </MudItem>
+                    <MudItem xs="4">
+                        <MudText Typo="Typo.caption">Links (incl. inferred)</MudText>
+                        <MudText Typo="Typo.h6">@_parseResult.Dependencies.Count</MudText>
+                    </MudItem>
+                    <MudItem xs="4">
+                        <MudText Typo="Typo.caption">Controls</MudText>
+                        <MudText Typo="Typo.h6">@_parseResult.Controls.Count</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.subtitle2" Class="mt-3">Suggested simulation inputs</MudText>
+                <MudText Typo="Typo.body2">
+                    EDR @(_parseResult.SuggestedParameters.EdrEffectiveness.ToString("P0")),
+                    patch lag @_parseResult.SuggestedParameters.PatchLagDays d,
+                    backup RPO @_parseResult.SuggestedParameters.BackupRpoHours h
+                </MudText>
+
+                @if (_parseResult.Report.Warnings.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Warnings</MudText>
+                    @foreach (var warning in _parseResult.Report.Warnings.Take(5))
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-1">@warning</MudAlert>
+                    }
+                }
+
+                <MudExpansionPanels Class="mt-3">
+                    <MudExpansionPanel Text="Column mappings">
+                        <MudSimpleTable Dense="true">
+                            <thead><tr><th>Canonical</th><th>Your column</th></tr></thead>
+                            <tbody>
+                            @foreach (var m in _parseResult.Report.ColumnMappings.Take(20))
+                            {
+                                <tr><td>@m.CanonicalField</td><td>@m.SourceColumn</td></tr>
+                            }
+                            </tbody>
+                        </MudSimpleTable>
+                    </MudExpansionPanel>
+                    <MudExpansionPanel Text="Asset preview (first 8)">
+                        <MudSimpleTable Dense="true" Style="font-size:12px">
+                            <thead>
+                            <tr><th>Name</th><th>Type</th><th>Zone</th><th>Crit.</th></tr>
+                            </thead>
+                            <tbody>
+                            @foreach (var a in _parseResult.Assets.Take(8))
+                            {
+                                <tr>
+                                    <td>@a.AssetName</td>
+                                    <td>@a.AssetType</td>
+                                    <td>@(a.Site ?? a.Department)</td>
+                                    <td>@a.CriticalityTag</td>
+                                </tr>
+                            }
+                            </tbody>
+                        </MudSimpleTable>
+                    </MudExpansionPanel>
+                </MudExpansionPanels>
+            </MudPaper>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _orgName = "";
+    private string _twinName = "Imported Twin";
+    private string? _csvContent;
+    private InfrastructureImportResult? _parseResult;
+    private bool _busy;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        await using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+        using var reader = new StreamReader(stream);
+        _csvContent = await reader.ReadToEndAsync();
+        _twinName = Path.GetFileNameWithoutExtension(file.Name);
+        Analyze();
+    }
+
+    private void Analyze()
+    {
+        if (string.IsNullOrWhiteSpace(_csvContent)) return;
+        try
+        {
+            _parseResult = Importer.AnalyzeCsv(_csvContent);
+            if (string.IsNullOrWhiteSpace(_orgName) && !string.IsNullOrEmpty(_parseResult.Report.OrganizationHint))
+                _orgName = _parseResult.Report.OrganizationHint.Split('.').FirstOrDefault() ?? "Organization";
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+            _parseResult = null;
+        }
+    }
+
+    private async Task ImportCsv()
+    {
+        if (string.IsNullOrWhiteSpace(_csvContent))
+        {
+            Snackbar.Add("Select a CSV first.", Severity.Warning);
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var (twinId, result) = await Importer.ImportCsvAsync(
+                string.IsNullOrWhiteSpace(_orgName) ? "Imported Organization" : _orgName,
+                _twinName,
+                _csvContent);
+            State.CurrentTwinId = twinId;
+            State.LastImportReport = result.Report;
+            State.SuggestedParameters = result.SuggestedParameters;
+            Snackbar.Add($"Imported {result.Assets.Count} assets, {result.Dependencies.Count} links.", Severity.Success);
+            Nav.NavigateTo("/topology");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ImportSample()
+    {
+        _busy = true;
+        try
+        {
+            State.CurrentTwinId = await Importer.ImportSampleAsync();
+            Snackbar.Add("Contoso sample loaded.", Severity.Success);
+            Nav.NavigateTo("/topology");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ImportCompanyTwin()
+    {
+        _busy = true;
+        try
+        {
+            State.CurrentTwinId = await Importer.ImportCompanyTwinAsync();
+            Snackbar.Add("Company digital twin loaded.", Severity.Success);
+            Nav.NavigateTo("/topology");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally { _busy = false; }
+    }
+}

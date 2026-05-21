@@ -1,0 +1,198 @@
+@page "/topology"
+@rendermode InteractiveServer
+@inject SimulationService Sims
+@inject TopologyLayoutService LayoutService
+@inject AppState State
+
+<PageTitle>Topology</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Digital twin topology</MudText>
+
+@if (State.CurrentTwinId is not Guid twinId)
+{
+    <MudAlert Severity="Severity.Warning">No twin loaded. <MudLink Href="/upload">Upload a twin</MudLink> first.</MudAlert>
+}
+else if (_twin is null)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="2" Class="mb-3">
+        <MudChip T="string">@_twin.Nodes.Count nodes</MudChip>
+        <MudChip T="string" Color="Color.Info">@_twin.Edges.Count edges</MudChip>
+        @if (State.LastImportReport is not null)
+        {
+            <MudChip T="string" Color="Color.Secondary">@State.LastImportReport.DetectedFormat</MudChip>
+        }
+    </MudStack>
+
+    <MudPaper Class="pa-3 mb-3">
+        <MudGrid>
+            <MudItem xs="12" md="3">
+                <MudSelect T="TopologyViewMode" @bind-Value="_viewMode" Label="View" Dense="true">
+                    <MudSelectItem Value="TopologyViewMode.Infrastructure">Infrastructure (servers + network)</MudSelectItem>
+                    <MudSelectItem Value="TopologyViewMode.CriticalOnly">Critical assets</MudSelectItem>
+                    <MudSelectItem Value="TopologyViewMode.All">All assets</MudSelectItem>
+                    <MudSelectItem Value="TopologyViewMode.ByZone">By zone</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudSelect T="string" @bind-Value="_nodeTypeFilter" Label="Type" Clearable="true" Dense="true">
+                    <MudSelectItem T="string" Value="@((string?)null)">All types</MudSelectItem>
+                    @foreach (var t in _nodeTypes)
+                    {
+                        <MudSelectItem T="string" Value="@t">@t</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                @if (_viewMode == TopologyViewMode.ByZone)
+                {
+                    <MudSelect T="string" @bind-Value="_selectedZone" Label="Zone" Dense="true">
+                        @foreach (var z in _zones)
+                        {
+                            <MudSelectItem T="string" Value="@z">@z</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else
+                {
+                    <MudTextField @bind-Value="_search" Label="Search" Placeholder="hostname, zone..." Immediate="true" />
+                }
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudButton Variant="Variant.Outlined" OnClick="RefreshLayout" Class="mt-1">Apply filters</MudButton>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @if (_layout is not null)
+    {
+        <MudText Typo="Typo.caption" Class="mb-1">
+            Showing @_layout.Nodes.Count nodes, @_layout.Edges.Count edges
+            @if (_layout.Nodes.Count < _twin.Nodes.Count)
+            {
+                <span> (filtered from @_twin.Nodes.Count)</span>
+            }
+        </MudText>
+
+        <MudPaper Class="pa-2" Style="overflow:auto; max-height:560px;">
+            <svg width="100%" height="@_layout.Height" viewBox="0 0 @_layout.Width @_layout.Height" style="min-width:@(_layout.Width)px">
+                @foreach (var zone in _layout.Zones)
+                {
+                    <rect x="@(zone.X - 8)" y="@(zone.Y - 24)" width="@zone.Width" height="@(zone.Height + 28)"
+                          fill="#1e1e2e" stroke="#444" stroke-width="1" rx="6" opacity="0.6" />
+                    @((MarkupString)$"<text x=\"{zone.X}\" y=\"{zone.Y - 8}\" fill=\"#aaa\" font-size=\"10\">{Truncate(zone.Zone, 22)} ({zone.NodeCount})</text>")
+                }
+                @foreach (var edge in _layout.Edges)
+                {
+                    if (_layout.Positions.TryGetValue(edge.FromNodeId, out var f) &&
+                        _layout.Positions.TryGetValue(edge.ToNodeId, out var t))
+                    {
+                        var color = edge.Kind switch
+                        {
+                            "identity" => "#ab47bc",
+                            "data" => "#26a69a",
+                            "deploy" => "#ffa726",
+                            "protects" => "#66bb6a",
+                            "monitoring" => "#42a5f5",
+                            _ => edge.IsSynthetic ? "#555" : "#888"
+                        };
+                        <line x1="@f.X" y1="@f.Y" x2="@t.X" y2="@t.Y" stroke="@color" stroke-width="1" opacity="0.45" />
+                    }
+                }
+                @foreach (var node in _layout.Nodes)
+                {
+                    if (!_layout.Positions.TryGetValue(node.Id, out var pos)) continue;
+                    var fill = NodeColor(node);
+                    <g transform="translate(@pos.X,@pos.Y)">
+                        <circle r="14" fill="@fill" stroke="#fff" stroke-width="1" opacity="0.9" />
+                        <title>@node.DisplayName (@node.NodeType) — @node.Zone</title>
+                    </g>
+                }
+            </svg>
+        </MudPaper>
+
+        <MudStack Row="true" Spacing="2" Class="mt-2">
+            <MudChip T="string" Size="Size.Small" Style="background:#b71c1c">Critical</MudChip>
+            <MudChip T="string" Size="Size.Small" Style="background:#e65100">High</MudChip>
+            <MudChip T="string" Size="Size.Small" Style="background:#1565c0">Other</MudChip>
+            <MudChip T="string" Size="Size.Small" Style="background:#2e7d32">Control</MudChip>
+            <MudText Typo="Typo.caption" Class="ml-2">Edges: network | identity | data | protects</MudText>
+        </MudStack>
+    }
+
+    <MudTable Items="_layout?.Nodes ?? []" Dense="true" Hover="true" Class="mt-4" RowsPerPage="15">
+        <ToolBarContent>
+            <MudText Typo="Typo.h6">Asset inventory</MudText>
+        </ToolBarContent>
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>Type</MudTh>
+            <MudTh>Zone</MudTh>
+            <MudTh>Crit.</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+            <MudTd DataLabel="Type">@context.NodeType</MudTd>
+            <MudTd DataLabel="Zone">@context.Zone</MudTd>
+            <MudTd DataLabel="Crit.">@context.CriticalityWeight</MudTd>
+        </RowTemplate>
+        <PagerContent>
+            <MudTablePager />
+        </PagerContent>
+    </MudTable>
+}
+
+@code {
+    private AgenticSecuritySimulator.Core.Entities.Twin? _twin;
+    private TopologyLayout? _layout;
+    private TopologyViewMode _viewMode = TopologyViewMode.Infrastructure;
+    private string? _nodeTypeFilter;
+    private string? _search;
+    private string? _selectedZone;
+    private List<string> _nodeTypes = [];
+    private List<string> _zones = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (State.CurrentTwinId is Guid twinId)
+            await LoadTwin(twinId);
+    }
+
+    private async Task LoadTwin(Guid twinId)
+    {
+        _twin = await Sims.GetTwinAsync(twinId);
+        if (_twin is null) return;
+
+        _nodeTypes = _twin.Nodes.Select(n => n.NodeType).Distinct().OrderBy(t => t).ToList();
+        _zones = _twin.Nodes.Select(n => n.Zone ?? "Unknown").Distinct().OrderBy(z => z).ToList();
+        _selectedZone ??= _zones.FirstOrDefault();
+        RefreshLayout();
+    }
+
+    private void RefreshLayout()
+    {
+        if (_twin is null) return;
+        _layout = LayoutService.Compute(_twin, new TopologyViewOptions
+        {
+            ViewMode = _viewMode,
+            NodeTypeFilter = _nodeTypeFilter,
+            Search = _search,
+            SelectedZone = _selectedZone
+        });
+    }
+
+    private static string NodeColor(AgenticSecuritySimulator.Core.Entities.TwinNode node) => node.NodeType switch
+    {
+        "Control" => "#2e7d32",
+        "Network" => "#6a1b9a",
+        _ when node.CriticalityWeight >= 0.9m => "#b71c1c",
+        _ when node.CriticalityWeight >= 0.7m => "#e65100",
+        _ => "#1565c0"
+    };
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..(max - 1)] + "…";
+}

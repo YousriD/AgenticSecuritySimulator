@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AgenticSecuritySimulator.Agents/AgenticSecuritySimulator.Agents.csproj" />
+    <Project Path="src/AgenticSecuritySimulator.Core/AgenticSecuritySimulator.Core.csproj" />
+    <Project Path="src/AgenticSecuritySimulator.Simulation/AgenticSecuritySimulator.Simulation.csproj" />
+    <Project Path="src/AgenticSecuritySimulator.Web/AgenticSecuritySimulator.Web.csproj" />
+  </Folder>
+</Solution>

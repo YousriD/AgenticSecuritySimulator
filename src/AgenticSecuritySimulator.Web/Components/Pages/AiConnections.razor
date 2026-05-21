@@ -1,0 +1,377 @@
+@page "/ai-connections"
+@rendermode InteractiveServer
+@using AgenticSecuritySimulator.Core.Entities
+@using AgenticSecuritySimulator.Web.Data
+@using Microsoft.EntityFrameworkCore
+@using System.Text
+@using System.Text.Json
+@inject AppDbContext Db
+@inject HttpClient Http
+@inject ISnackbar Snackbar
+
+<PageTitle>AI Connections</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4" GutterBottom="true">AI Agent Connections</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="7">
+        <MudCard Class="mb-4">
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Configured AI Providers</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">Select which local or cloud LLM should drive your red and blue agent planners.</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (_providers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Class="my-2">No AI provider configurations registered. Add one using the form on the right.</MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="_providers" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Type</MudTh>
+                            <MudTh>Endpoint</MudTh>
+                            <MudTh>Model</MudTh>
+                            <MudTh>Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Status">
+                                @if (context.IsActive)
+                                {
+                                    <MudChip T="string" Color="Color.Success" Size="Size.Small">Active</MudChip>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Color="Color.Default" Size="Size.Small" OnClick="() => ToggleActive(context)">Inactive</MudChip>
+                                }
+                            </MudTd>
+                            <MudTd DataLabel="Name">@context.DisplayName</MudTd>
+                            <MudTd DataLabel="Type">
+                                <MudChip T="string" Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small">@context.ProviderType</MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="Endpoint"><span style="font-family:monospace; font-size:11px;">@context.Endpoint</span></MudTd>
+                            <MudTd DataLabel="Model"><span style="font-family:monospace; font-size:11px;">@context.ModelName</span></MudTd>
+                            <MudTd DataLabel="Actions">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Primary" OnClick="() => Edit(context)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="() => Delete(context)" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudCardContent>
+        </MudCard>
+
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">How Local Models Fit In</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    Our hybrid Monte Carlo engine is designed to run <strong>500 to 1,000 deterministic runs locally at zero cost ($0)</strong> using optimized C# graph logic.
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    AI models (local or cloud) are utilized as <strong>high-level batch planners</strong> (planning the adversary strategy or defensive playbooks once per simulation) and as <strong>narrative summarizers</strong>.
+                </MudText>
+                <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined" Class="mt-3">
+                    <strong>Local ports overview:</strong><br />
+                    • <strong>Ollama</strong> standard API: <code style="color:#ffa726">http://localhost:11434</code> (supports standard OpenAI endpoints out-of-the-box).<br />
+                    • <strong>LM Studio</strong> standard API: <code style="color:#ffa726">http://localhost:1234</code>.
+                </MudAlert>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" md="5">
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">@(_editingId.HasValue ? "Edit Provider" : "Add AI Provider")</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudSelect T="string" Label="Provider Type" @bind-Value="_model.ProviderType" @bind-Value:after="OnProviderChanged" Class="mb-3" Required="true">
+                    <MudSelectItem Value="@("Ollama")">Ollama (Local)</MudSelectItem>
+                    <MudSelectItem Value="@("LMStudio")">LM Studio (Local)</MudSelectItem>
+                    <MudSelectItem Value="@("AzureOpenAI")">Azure OpenAI (Cloud)</MudSelectItem>
+                </MudSelect>
+
+                <MudTextField T="string" Label="Display Name" @bind-Value="_model.DisplayName" Placeholder="e.g. Local Gemma 2B" Required="true" Class="mb-3" />
+                <MudTextField T="string" Label="Endpoint URL" @bind-Value="_model.Endpoint" Placeholder="e.g. http://localhost:11434" Required="true" Class="mb-3" />
+                <MudTextField T="string" Label="Model ID Tag" @bind-Value="_model.ModelName" Placeholder="e.g. gemma:2b" Required="true" Class="mb-3" />
+                
+                <MudTextField T="string" Label="API Key (Optional)" @bind-Value="_model.ApiKey" 
+                              InputType="InputType.Password" Placeholder="None or Cloud API credentials" Class="mb-4" />
+
+                <MudCheckBox @bind-Value="_model.IsActive" Label="Set as Active Provider" Class="mb-4" />
+
+                @if (!string.IsNullOrEmpty(_testResult))
+                {
+                    <MudAlert Severity="@(_testSuccess ? Severity.Success : Severity.Error)" Class="mb-4" Dense="true">
+                        @_testResult
+                    </MudAlert>
+                }
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.SettingsInputComponent" 
+                           OnClick="TestConnectionAsync" Disabled="_testing" Class="mr-2">
+                    @(_testing ? "Testing..." : "Test Connection")
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Save" 
+                           OnClick="SaveAsync" Disabled="_testing">
+                    Save
+                </MudButton>
+                @if (_editingId.HasValue)
+                {
+                    <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="CancelEdit" Class="ml-auto">Cancel</MudButton>
+                }
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private List<AiProviderSetting> _providers = new();
+    private AiProviderSetting _model = new() { ProviderType = "Ollama", Endpoint = "http://localhost:11434", ModelName = "gemma:2b", DisplayName = "Ollama Gemma 2B" };
+    private Guid? _editingId;
+    private bool _testing = false;
+    private string _testResult = "";
+    private bool _testSuccess = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProvidersAsync();
+    }
+
+    private async Task LoadProvidersAsync()
+    {
+        _providers = await Db.AiProviderSettings.OrderBy(p => p.DisplayName).ToListAsync();
+    }
+
+    private void OnProviderChanged()
+    {
+        if (_editingId.HasValue) return;
+
+        if (_model.ProviderType == "Ollama")
+        {
+            _model.Endpoint = "http://localhost:11434";
+            _model.ModelName = "gemma:2b";
+            _model.DisplayName = "Ollama Gemma 2B";
+        }
+        else if (_model.ProviderType == "LMStudio")
+        {
+            _model.Endpoint = "http://localhost:1234";
+            _model.ModelName = "local-model";
+            _model.DisplayName = "LM Studio Local LLM";
+        }
+        else
+        {
+            _model.Endpoint = "https://your-resource.openai.azure.com";
+            _model.ModelName = "gpt-4o-mini";
+            _model.DisplayName = "Azure OpenAI Service";
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_model.Endpoint) || string.IsNullOrWhiteSpace(_model.ModelName))
+        {
+            _testSuccess = false;
+            _testResult = "Endpoint URL and Model ID Tag are required to test connection.";
+            return;
+        }
+
+        _testing = true;
+        _testResult = "Connecting to agent...";
+        StateHasChanged();
+
+        try
+        {
+            var endpoint = _model.Endpoint.TrimEnd('/');
+            string requestUrl;
+            
+            if (_model.ProviderType == "AzureOpenAI")
+            {
+                requestUrl = $"{endpoint}/openai/deployments/{_model.ModelName}/chat/completions?api-version=2024-02-15-preview";
+            }
+            else
+            {
+                requestUrl = $"{endpoint}/v1/chat/completions";
+            }
+
+            var request = new HttpRequestMessage(HttpMethod.Post, requestUrl);
+            
+            if (!string.IsNullOrEmpty(_model.ApiKey))
+            {
+                if (_model.ProviderType == "AzureOpenAI")
+                    request.Headers.Add("api-key", _model.ApiKey);
+                else
+                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _model.ApiKey);
+            }
+
+            var payload = new
+            {
+                model = _model.ModelName,
+                messages = new[] { new { role = "user", content = "ping" } },
+                max_tokens = 5
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            // Give it a quick 8-second timeout for testing
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var response = await Http.SendAsync(request, cts.Token);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(content);
+                _testSuccess = true;
+                _testResult = $"Connection Successful! Model responded with success code 200.";
+            }
+            else
+            {
+                _testSuccess = false;
+                _testResult = $"Connection failed. Endpoint responded with HTTP {response.StatusCode} ({response.ReasonPhrase}).";
+            }
+        }
+        catch (Exception ex)
+        {
+            _testSuccess = false;
+            _testResult = $"Connection Error: {ex.Message}. Make sure your local provider (Ollama/LM Studio) is running and CORS is enabled.";
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_model.DisplayName) || string.IsNullOrWhiteSpace(_model.Endpoint) || string.IsNullOrWhiteSpace(_model.ModelName))
+        {
+            Snackbar.Add("Please fill in all required fields.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            if (_editingId.HasValue)
+            {
+                var existing = await Db.AiProviderSettings.FindAsync(_editingId.Value);
+                if (existing is not null)
+                {
+                    existing.DisplayName = _model.DisplayName;
+                    existing.ProviderType = _model.ProviderType;
+                    existing.Endpoint = _model.Endpoint;
+                    existing.ModelName = _model.ModelName;
+                    existing.ApiKey = _model.ApiKey;
+                    existing.IsActive = _model.IsActive;
+                }
+            }
+            else
+            {
+                var setting = new AiProviderSetting
+                {
+                    DisplayName = _model.DisplayName,
+                    ProviderType = _model.ProviderType,
+                    Endpoint = _model.Endpoint,
+                    ModelName = _model.ModelName,
+                    ApiKey = _model.ApiKey,
+                    IsActive = _model.IsActive
+                };
+                Db.AiProviderSettings.Add(setting);
+            }
+
+            await Db.SaveChangesAsync();
+
+            if (_model.IsActive)
+            {
+                // Deactivate all others
+                var currentId = _editingId ?? Db.Entry(_model).Entity.Id;
+                var others = await Db.AiProviderSettings.Where(o => o.Id != currentId).ToListAsync();
+                foreach (var other in others)
+                {
+                    other.IsActive = false;
+                }
+                await Db.SaveChangesAsync();
+            }
+
+            Snackbar.Add("AI connection configuration saved successfully.", Severity.Success);
+            _editingId = null;
+            _testResult = "";
+            _model = new() { ProviderType = "Ollama", Endpoint = "http://localhost:11434", ModelName = "gemma:2b", DisplayName = "Ollama Gemma 2B" };
+            await LoadProvidersAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ToggleActive(AiProviderSetting setting)
+    {
+        try
+        {
+            var all = await Db.AiProviderSettings.ToListAsync();
+            foreach (var s in all)
+            {
+                s.IsActive = s.Id == setting.Id;
+            }
+            await Db.SaveChangesAsync();
+            Snackbar.Add($"Activated AI Connection: {setting.DisplayName}", Severity.Success);
+            await LoadProvidersAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error activating: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Edit(AiProviderSetting setting)
+    {
+        _editingId = setting.Id;
+        _model = new AiProviderSetting
+        {
+            DisplayName = setting.DisplayName,
+            ProviderType = setting.ProviderType,
+            Endpoint = setting.Endpoint,
+            ModelName = setting.ModelName,
+            ApiKey = setting.ApiKey,
+            IsActive = setting.IsActive
+        };
+        _testResult = "";
+    }
+
+    private async Task Delete(AiProviderSetting setting)
+    {
+        try
+        {
+            Db.AiProviderSettings.Remove(setting);
+            await Db.SaveChangesAsync();
+            Snackbar.Add("AI connection configuration deleted.", Severity.Info);
+            if (_editingId == setting.Id)
+            {
+                CancelEdit();
+            }
+            await LoadProvidersAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error deleting: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _testResult = "";
+        _model = new() { ProviderType = "Ollama", Endpoint = "http://localhost:11434", ModelName = "gemma:2b", DisplayName = "Ollama Gemma 2B" };
+    }
+}

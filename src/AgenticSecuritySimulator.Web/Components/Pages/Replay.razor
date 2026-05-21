@@ -1,0 +1,400 @@
+@page "/replay"
+@rendermode InteractiveServer
+@using AgenticSecuritySimulator.Core.Entities
+@using AgenticSecuritySimulator.Web.Data
+@using Microsoft.EntityFrameworkCore
+@inject SimulationService Sims
+@inject TopologyLayoutService LayoutService
+@inject AppState State
+@inject AppDbContext Db
+@inject ISnackbar Snackbar
+
+<PageTitle>Attack Replay Arena</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-3" GutterBottom="true">Attack-Defense Replay Arena</MudText>
+
+@if (State.LastBatchId is not Guid batchId)
+{
+    <MudAlert Severity="Severity.Info" Class="ma-4">
+        Complete a simulation run first to view interactive attack/defense playback. 
+        Go to the <MudLink Href="/scenarios">Scenarios screen</MudLink> to execute a Monte Carlo batch.
+    </MudAlert>
+}
+else if (_run is null || _layout is null)
+{
+    <MudProgressCircular Indeterminate="true" Class="ma-4" />
+}
+else
+{
+    <MudGrid>
+        <!-- Top Control Center -->
+        <MudItem xs="12">
+            <MudPaper Class="pa-3 mb-2" Style="background:#1e1e2e;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Color="Color.Default" OnClick="Reset" Title="Reset playback" />
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowLeft" Color="Color.Primary" OnClick="StepBackward" Disabled="@(_currentStepIndex <= -1)" Title="Step Backward" />
+                        
+                        @if (_isPlaying)
+                        {
+                            <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Pause" Color="Color.Warning" OnClick="Pause">Pause</MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" OnClick="PlayAsync">Play Replay</MudButton>
+                        }
+
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowRight" Color="Color.Primary" OnClick="StepForward" Disabled="@(_currentStepIndex >= _events.Count - 1)" Title="Step Forward" />
+                    </MudStack>
+
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Style="width: 250px;">
+                        <MudText Typo="Typo.caption" Class="mr-2">Speed</MudText>
+                        <MudSlider T="int" @bind-Value="_playbackSpeedMs" Min="500" Max="3000" Step="250" Color="Color.Secondary" />
+                        <MudText Typo="Typo.caption" Class="ml-2">@((decimal)_playbackSpeedMs/1000m)s</MudText>
+                    </MudStack>
+
+                    <MudText Typo="Typo.subtitle1" Class="mud-text-secondary">
+                        Step: <strong>@(_currentStepIndex + 1)</strong> / @_events.Count | Score <strong>R = @_run.ResilienceScore</strong>
+                    </MudText>
+                </MudStack>
+
+                <MudProgressLinear Value="@((double)(_currentStepIndex + 1) / _events.Count * 100)" Color="Color.Error" Height="6" Class="mt-3" />
+            </MudPaper>
+        </MudItem>
+
+        <!-- Left Column: Chronological Event Feed -->
+        <MudItem xs="12" md="4">
+            <MudCard Style="max-height: 650px; overflow-y: auto; background:#181824;">
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.h6">Incident Timeline</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Scenario: @_run.ScenarioId (Median Batch Run)</MudText>
+                    </CardHeaderContent>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudTimeline TimelinePosition="TimelinePosition.Start" TimelineAlign="TimelineAlign.Start">
+                        @for (var i = 0; i < _events.Count; i++)
+                        {
+                            var index = i;
+                            var evt = _events[i];
+                            var isPassed = index <= _currentStepIndex;
+                            var isCurrent = index == _currentStepIndex;
+                            var color = evt.Actor == "red" ? Color.Error : Color.Info;
+                            var borderStyle = isCurrent ? "border: 2px solid #ffb300; background: #2b2b3d; border-radius:6px;" : "";
+
+                            <MudTimelineItem Color="@color" Size="Size.Small" Variant="@(isPassed ? Variant.Filled : Variant.Outlined)">
+                                <ItemContent>
+                                    <div style="padding: 6px; cursor: pointer; @borderStyle" @onclick="() => SetStep(index)">
+                                        <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                            <MudText Typo="Typo.subtitle2" Color="@(isPassed ? Color.Inherit : Color.Secondary)">
+                                                @evt.TechniqueId — @(evt.Outcome.ToUpperInvariant())
+                                            </MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                T+@(evt.TimestampOffsetMs / 60000)m
+                                            </MudText>
+                                        </MudStack>
+                                        <MudText Typo="Typo.body2" Color="@(isPassed ? Color.Inherit : Color.Secondary)">
+                                            @evt.Message
+                                        </MudText>
+                                    </div>
+                                </ItemContent>
+                            </MudTimelineItem>
+                        }
+                    </MudTimeline>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <!-- Right Column: Interactive Territory Map -->
+        <MudItem xs="12" md="8">
+            <MudPaper Class="pa-2" Style="background:#11111b; overflow:auto; max-height:650px;">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" Class="px-3 py-1">
+                    <MudText Typo="Typo.h6">Territory Map (SVG Visualizer)</MudText>
+                    <MudStack Row="true" Spacing="2">
+                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#d32f2f; margin-right:4px;"></span> Conquered</span>
+                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#2e7d32; margin-right:4px;"></span> Active Defense</span>
+                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#757575; margin-right:4px;"></span> Isolated Node</span>
+                    </MudStack>
+                </MudStack>
+
+                <svg width="100%" height="@_layout.Height" viewBox="0 0 @_layout.Width @_layout.Height" style="min-width:@(_layout.Width)px">
+                    <!-- Draw Zones -->
+                    @foreach (var zone in _layout.Zones)
+                    {
+                        <rect x="@(zone.X - 8)" y="@(zone.Y - 24)" width="@zone.Width" height="@(zone.Height + 28)"
+                              fill="#1e1e2e" stroke="#333" stroke-width="1" rx="6" opacity="0.45" />
+                        @((MarkupString)$"<text x=\"{zone.X}\" y=\"{zone.Y - 8}\" fill=\"#aaa\" font-size=\"10\" font-weight=\"bold\">{Truncate(zone.Zone, 22)}</text>")
+                    }
+
+                    <!-- Draw Subnet Connection Edges -->
+                    @foreach (var edge in _layout.Edges)
+                    {
+                        if (_layout.Positions.TryGetValue(edge.FromNodeId, out var f) &&
+                            _layout.Positions.TryGetValue(edge.ToNodeId, out var t))
+                        {
+                            var fromComp = IsCompromised(edge.FromNodeId);
+                            var toComp = IsCompromised(edge.ToNodeId);
+                            
+                            var edgeColor = "#555";
+                            var strokeWidth = "1";
+                            var dashArray = "";
+
+                            if (IsIsolated(edge.FromNodeId) || IsIsolated(edge.ToNodeId))
+                            {
+                                edgeColor = "#444";
+                                dashArray = "4,4";
+                            }
+                            else if (fromComp && toComp)
+                            {
+                                edgeColor = "#ef5350"; // Pulsing red connection
+                                strokeWidth = "2";
+                            }
+                            else if (edge.Kind == "identity")
+                            {
+                                edgeColor = "#ab47bc";
+                            }
+                            else if (edge.Kind == "data")
+                            {
+                                edgeColor = "#26a69a";
+                            }
+
+                            <line x1="@f.X" y1="@f.Y" x2="@t.X" y2="@t.Y" 
+                                  stroke="@edgeColor" stroke-width="@strokeWidth" stroke-dasharray="@dashArray" opacity="0.65" />
+                        }
+                    }
+
+                    <!-- Draw Dynamic Animated Nodes -->
+                    @foreach (var node in _layout.Nodes)
+                    {
+                        if (!_layout.Positions.TryGetValue(node.Id, out var pos)) continue;
+                        
+                        var state = GetNodeState(node.Id);
+                        var fill = "#1565c0"; // Blue default
+                        var stroke = "#ffffff";
+                        var strokeWidth = "1";
+                        var nodeStrokeDash = "";
+                        var glowClass = "";
+
+                        if (state == "foothold")
+                        {
+                            fill = "#e53935"; // Bright Red
+                            stroke = "#ffeb3b"; // Yellow outline
+                            strokeWidth = "2";
+                            glowClass = "glow-red";
+                        }
+                        else if (state == "compromised")
+                        {
+                            fill = "#c62828"; // Dark Red
+                            stroke = "#ef5350";
+                            strokeWidth = "2";
+                            glowClass = "glow-red";
+                        }
+                        else if (state == "blocked")
+                        {
+                            fill = "#2e7d32"; // Rich Green EDR
+                            stroke = "#81c784";
+                            strokeWidth = "2";
+                        }
+                        else if (state == "isolated")
+                        {
+                            fill = "#424242"; // Isolated Steel Gray
+                            stroke = "#757575";
+                            strokeWidth = "1.5";
+                            nodeStrokeDash = "2,2";
+                        }
+                        else
+                        {
+                            // Standard node color types
+                            fill = node.NodeType switch
+                            {
+                                "Control" => "#2e7d32",
+                                "Network" => "#6a1b9a",
+                                _ when node.CriticalityWeight >= 0.9m => "#d84315", // Crown Jewel Orange
+                                _ when node.CriticalityWeight >= 0.7m => "#ff8f00",
+                                _ => "#1565c0"
+                            };
+                        }
+
+                        <g transform="translate(@pos.X,@pos.Y)" class="@glowClass">
+                            <circle r="14" fill="@fill" stroke="@stroke" stroke-width="@strokeWidth" stroke-dasharray="@nodeStrokeDash" opacity="0.95" />
+                            
+                            <!-- Overlay Special Icons -->
+                            @{
+                                string iconHtml;
+                                if (state == "isolated")
+                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-weight=\"bold\" font-family=\"Segoe UI Symbol\">🔒</text>";
+                                else if (state == "blocked")
+                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-weight=\"bold\" font-family=\"Segoe UI Symbol\">🛡️</text>";
+                                else if (node.CriticalityWeight >= 0.9m)
+                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"10\" font-weight=\"bold\">👑</text>";
+                                else
+                                {
+                                    var abbr = node.DisplayName.Substring(0, Math.Min(2, node.DisplayName.Length));
+                                    iconHtml = $"<text x=\"-4\" y=\"4\" fill=\"#fff\" font-size=\"9\" opacity=\"0.6\">{abbr}</text>";
+                                }
+                            }
+                            @((MarkupString)iconHtml)
+
+                            <title>@node.DisplayName (@node.NodeType) | State: @(state.ToUpperInvariant())</title>
+                        </g>
+                    }
+                </svg>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <style>
+        @@keyframes pulse-red {
+            0% {
+                filter: drop-shadow(0 0 2px rgba(229, 57, 53, 0.6));
+            }
+            50% {
+                filter: drop-shadow(0 0 10px rgba(229, 57, 53, 0.9));
+            }
+            100% {
+                filter: drop-shadow(0 0 2px rgba(229, 57, 53, 0.6));
+            }
+        }
+        .glow-red {
+            animation: pulse-red 1.5s infinite;
+        }
+    </style>
+}
+
+@code {
+    private AgenticSecuritySimulator.Core.Entities.SimulationRun? _run;
+    private List<SimulationEvent> _events = new();
+    private TopologyLayout? _layout;
+    private Dictionary<Guid, string> _nodeStates = new();
+    private int _currentStepIndex = -1; // -1 means initial baseline state
+    private bool _isPlaying = false;
+    private int _playbackSpeedMs = 1500;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (State.LastBatchId is Guid batchId)
+        {
+            var batch = await Sims.GetBatchAsync(batchId);
+            if (batch?.Runs.Count > 0)
+            {
+                // Fetch the median run to replay
+                var ordered = batch.Runs
+                    .Where(r => r.ResilienceScore.HasValue)
+                    .OrderBy(r => r.ResilienceScore)
+                    .ToList();
+                _run = ordered[ordered.Count / 2];
+
+                // Load events of the target run
+                _events = await Db.SimulationEvents
+                    .Where(e => e.RunId == _run.Id)
+                    .OrderBy(e => e.Sequence)
+                    .ToListAsync();
+
+                // Load Twin & Edges associated with this batch run
+                var twin = await Db.Twins
+                    .Include(t => t.Nodes)
+                    .Include(t => t.Edges)
+                    .FirstOrDefaultAsync(t => t.Id == batch.TwinId);
+
+                if (twin is not null)
+                {
+                    _layout = LayoutService.Compute(twin, new TopologyViewOptions
+                    {
+                        ViewMode = TopologyViewMode.All,
+                        MaxEdges = 300
+                    });
+                }
+
+                RecomputeNodeStates();
+            }
+        }
+    }
+
+    private void RecomputeNodeStates()
+    {
+        _nodeStates.Clear();
+        for (var i = 0; i <= _currentStepIndex; i++)
+        {
+            var evt = _events[i];
+            if (evt.NodeId.HasValue)
+            {
+                _nodeStates[evt.NodeId.Value] = evt.Outcome.ToLowerInvariant();
+            }
+        }
+    }
+
+    private string GetNodeState(Guid nodeId)
+    {
+        return _nodeStates.TryGetValue(nodeId, out var state) ? state : "normal";
+    }
+
+    private bool IsCompromised(Guid nodeId)
+    {
+        var s = GetNodeState(nodeId);
+        return s == "foothold" || s == "compromised";
+    }
+
+    private bool IsIsolated(Guid nodeId)
+    {
+        return GetNodeState(nodeId) == "isolated";
+    }
+
+    private async Task PlayAsync()
+    {
+        if (_isPlaying) return;
+        _isPlaying = true;
+
+        while (_isPlaying && _currentStepIndex < _events.Count - 1)
+        {
+            _currentStepIndex++;
+            RecomputeNodeStates();
+            StateHasChanged();
+            await Task.Delay(_playbackSpeedMs);
+        }
+
+        _isPlaying = false;
+        StateHasChanged();
+    }
+
+    private void Pause()
+    {
+        _isPlaying = false;
+    }
+
+    private void StepForward()
+    {
+        Pause();
+        if (_currentStepIndex < _events.Count - 1)
+        {
+            _currentStepIndex++;
+            RecomputeNodeStates();
+        }
+    }
+
+    private void StepBackward()
+    {
+        Pause();
+        if (_currentStepIndex > -1)
+        {
+            _currentStepIndex--;
+            RecomputeNodeStates();
+        }
+    }
+
+    private void Reset()
+    {
+        Pause();
+        _currentStepIndex = -1;
+        RecomputeNodeStates();
+    }
+
+    private void SetStep(int index)
+    {
+        Pause();
+        _currentStepIndex = index;
+        RecomputeNodeStates();
+    }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..(max - 1)] + "…";
+}
