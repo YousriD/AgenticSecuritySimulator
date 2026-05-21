@@ -2,98 +2,213 @@
 @rendermode InteractiveServer
 @using AgenticSecuritySimulator.Core.Entities
 @using AgenticSecuritySimulator.Web.Data
+@using AgenticSecuritySimulator.Web.Hubs
+@using Microsoft.AspNetCore.SignalR
 @using Microsoft.EntityFrameworkCore
 @inject SimulationService Sims
 @inject TopologyLayoutService LayoutService
+@inject ReplayStateService ReplayState
+@inject IHubContext<ReplayHub> HubCtx
 @inject AppState State
 @inject AppDbContext Db
 @inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@implements IAsyncDisposable
 
 <PageTitle>Attack Replay Arena</PageTitle>
 
-<MudText Typo="Typo.h4" Class="mb-3" GutterBottom="true">Attack-Defense Replay Arena</MudText>
+<MudText Typo="Typo.h4" Class="mb-1" GutterBottom="false">⚔️ Attack-Defense Replay Arena</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+    Step through the median simulation run event-by-event. Use the controls or keyboard shortcuts to navigate.
+</MudText>
 
 @if (State.LastBatchId is not Guid batchId)
 {
     <MudAlert Severity="Severity.Info" Class="ma-4">
-        Complete a simulation run first to view interactive attack/defense playback. 
+        Complete a simulation run first to view interactive attack/defense playback.
         Go to the <MudLink Href="/scenarios">Scenarios screen</MudLink> to execute a Monte Carlo batch.
     </MudAlert>
 }
+else if (_loading)
+{
+    <MudStack AlignItems="AlignItems.Center" Class="mt-8">
+        <MudProgressCircular Indeterminate="true" Size="Size.Large" Color="Color.Primary" />
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">Loading replay data…</MudText>
+    </MudStack>
+}
 else if (_run is null || _layout is null)
 {
-    <MudProgressCircular Indeterminate="true" Class="ma-4" />
+    <MudAlert Severity="Severity.Warning">No simulation run data found for this batch.</MudAlert>
 }
 else
 {
-    <MudGrid>
-        <!-- Top Control Center -->
-        <MudItem xs="12">
-            <MudPaper Class="pa-3 mb-2" Style="background:#1e1e2e;">
-                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                        <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Color="Color.Default" OnClick="Reset" Title="Reset playback" />
-                        <MudIconButton Icon="@Icons.Material.Filled.ArrowLeft" Color="Color.Primary" OnClick="StepBackward" Disabled="@(_currentStepIndex <= -1)" Title="Step Backward" />
-                        
-                        @if (_isPlaying)
-                        {
-                            <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Pause" Color="Color.Warning" OnClick="Pause">Pause</MudButton>
-                        }
-                        else
-                        {
-                            <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.PlayArrow" Color="Color.Success" OnClick="PlayAsync">Play Replay</MudButton>
-                        }
+    <!-- Run Selector + Filter Bar -->
+    <MudPaper Class="pa-3 mb-2" Style="background:#1a1a2e; border:1px solid #2d2d4e;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Run:</MudText>
+                <MudToggleGroup T="string" @bind-Value="_runMode" Color="Color.Primary" Size="Size.Small">
+                    <MudToggleItem Value="@("median")">Median</MudToggleItem>
+                    <MudToggleItem Value="@("worst")">Worst</MudToggleItem>
+                    <MudToggleItem Value="@("best")">Best</MudToggleItem>
+                </MudToggleGroup>
+            </MudStack>
 
-                        <MudIconButton Icon="@Icons.Material.Filled.ArrowRight" Color="Color.Primary" OnClick="StepForward" Disabled="@(_currentStepIndex >= _events.Count - 1)" Title="Step Forward" />
-                    </MudStack>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Filter:</MudText>
+                <MudToggleGroup T="string" @bind-Value="_actorFilter" Color="Color.Secondary" Size="Size.Small">
+                    <MudToggleItem Value="@("all")">All</MudToggleItem>
+                    <MudToggleItem Value="@("red")">🔴 Red</MudToggleItem>
+                    <MudToggleItem Value="@("blue")">🔵 Blue</MudToggleItem>
+                </MudToggleGroup>
+            </MudStack>
 
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Style="width: 250px;">
-                        <MudText Typo="Typo.caption" Class="mr-2">Speed</MudText>
-                        <MudSlider T="int" @bind-Value="_playbackSpeedMs" Min="500" Max="3000" Step="250" Color="Color.Secondary" />
-                        <MudText Typo="Typo.caption" Class="ml-2">@((decimal)_playbackSpeedMs/1000m)s</MudText>
-                    </MudStack>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Scenario:</MudText>
+                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">@_run.ScenarioId</MudChip>
+                <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">R = @_run.ResilienceScore</MudChip>
+            </MudStack>
+        </MudStack>
+    </MudPaper>
 
-                    <MudText Typo="Typo.subtitle1" Class="mud-text-secondary">
-                        Step: <strong>@(_currentStepIndex + 1)</strong> / @_events.Count | Score <strong>R = @_run.ResilienceScore</strong>
-                    </MudText>
-                </MudStack>
+    <!-- Playback Control Bar -->
+    <MudPaper Class="pa-3 mb-2" Style="background:#1e1e2e; border:1px solid #2d2d4e;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="2">
+            <!-- Transport Controls -->
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudTooltip Text="Reset (R)">
+                    <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Color="Color.Default" OnClick="Reset" Size="Size.Small" />
+                </MudTooltip>
+                <MudTooltip Text="Step Back (←)">
+                    <MudIconButton Icon="@Icons.Material.Filled.SkipPrevious" Color="Color.Primary"
+                                   OnClick="StepBackward" Disabled="@(_currentStepIndex <= -1)" Size="Size.Small" />
+                </MudTooltip>
 
-                <MudProgressLinear Value="@((double)(_currentStepIndex + 1) / _events.Count * 100)" Color="Color.Error" Height="6" Class="mt-3" />
-            </MudPaper>
-        </MudItem>
+                @if (_isPlaying)
+                {
+                    <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Pause"
+                               Color="Color.Warning" OnClick="Pause" Size="Size.Small">Pause</MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.PlayArrow"
+                               Color="Color.Success" OnClick="PlayAsync" Size="Size.Small"
+                               Disabled="@(_currentStepIndex >= _filteredEvents.Count - 1)">Play</MudButton>
+                }
 
-        <!-- Left Column: Chronological Event Feed -->
+                <MudTooltip Text="Step Forward (→)">
+                    <MudIconButton Icon="@Icons.Material.Filled.SkipNext" Color="Color.Primary"
+                                   OnClick="StepForward" Disabled="@(_currentStepIndex >= _filteredEvents.Count - 1)" Size="Size.Small" />
+                </MudTooltip>
+
+                <MudTooltip Text="Jump to End">
+                    <MudIconButton Icon="@Icons.Material.Filled.LastPage" Color="Color.Default"
+                                   OnClick="JumpToEnd" Size="Size.Small" />
+                </MudTooltip>
+
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
+
+                <MudTooltip Text="Bookmark this step (B)">
+                    <MudIconButton Icon="@(_session.Bookmarks.Contains(_currentStepIndex) ? Icons.Material.Filled.Bookmark : Icons.Material.Outlined.BookmarkBorder)"
+                                   Color="@(_session.Bookmarks.Contains(_currentStepIndex) ? Color.Warning : Color.Default)"
+                                   OnClick="ToggleBookmark" Size="Size.Small" />
+                </MudTooltip>
+
+                @if (_session.Bookmarks.Count > 0)
+                {
+                    <MudTooltip Text="Previous bookmark">
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Color="Color.Warning"
+                                       OnClick="PrevBookmark" Size="Size.Small" />
+                    </MudTooltip>
+                    <MudTooltip Text="Next bookmark">
+                        <MudIconButton Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Warning"
+                                       OnClick="NextBookmark" Size="Size.Small" />
+                    </MudTooltip>
+                }
+            </MudStack>
+
+            <!-- Speed Control -->
+            <MudStack Row="true" AlignItems="AlignItems.Center" Style="min-width:200px;" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Speed" Size="Size.Small" Color="Color.Secondary" />
+                <MudSlider T="int" @bind-Value="_playbackSpeedMs" Min="200" Max="3000" Step="200"
+                           Color="Color.Secondary" Style="flex:1;" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:32px;">@((_playbackSpeedMs / 1000m).ToString("F1"))s</MudText>
+            </MudStack>
+
+            <!-- Step Counter -->
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Step <strong style="color:#fff;">@(_currentStepIndex + 1)</strong> / @_filteredEvents.Count
+                @if (_allEvents.Count != _filteredEvents.Count)
+                {
+                    <span> (filtered from @_allEvents.Count)</span>
+                }
+            </MudText>
+        </MudStack>
+
+        <!-- Scrub Bar -->
+        <MudSlider T="int" Value="@(_currentStepIndex + 1)" ValueChanged="OnScrub"
+                   Min="0" Max="@_filteredEvents.Count" Step="1"
+                   Color="Color.Error" Class="mt-2" Style="margin-bottom:-8px;" />
+
+        <!-- Bookmark Markers overlay hint -->
+        @if (_session.Bookmarks.Count > 0)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1">
+                📌 Bookmarks at steps: @string.Join(", ", _session.Bookmarks.OrderBy(x => x).Select(b => b + 1))
+            </MudText>
+        }
+    </MudPaper>
+
+    <MudGrid Spacing="2">
+        <!-- Left: Incident Timeline -->
         <MudItem xs="12" md="4">
-            <MudCard Style="max-height: 650px; overflow-y: auto; background:#181824;">
+            <MudCard Style="height:620px; overflow-y:auto; background:#181824; border:1px solid #2d2d4e;" id="timeline-scroll">
                 <MudCardHeader>
                     <CardHeaderContent>
-                        <MudText Typo="Typo.h6">Incident Timeline</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Scenario: @_run.ScenarioId (Median Batch Run)</MudText>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudText Typo="Typo.h6">📋 Incident Timeline</MudText>
+                            <MudStack Row="true" Spacing="1">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">
+                                    @_filteredEvents.Count(e => e.Actor == "red") red
+                                </MudChip>
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                                    @_filteredEvents.Count(e => e.Actor == "blue") blue
+                                </MudChip>
+                            </MudStack>
+                        </MudStack>
                     </CardHeaderContent>
                 </MudCardHeader>
-                <MudCardContent>
+                <MudCardContent Class="pa-2">
                     <MudTimeline TimelinePosition="TimelinePosition.Start" TimelineAlign="TimelineAlign.Start">
-                        @for (var i = 0; i < _events.Count; i++)
+                        @for (var i = 0; i < _filteredEvents.Count; i++)
                         {
                             var index = i;
-                            var evt = _events[i];
+                            var evt = _filteredEvents[i];
                             var isPassed = index <= _currentStepIndex;
                             var isCurrent = index == _currentStepIndex;
+                            var isBookmarked = _session.Bookmarks.Contains(index);
                             var color = evt.Actor == "red" ? Color.Error : Color.Info;
-                            var borderStyle = isCurrent ? "border: 2px solid #ffb300; background: #2b2b3d; border-radius:6px;" : "";
+                            var borderStyle = isCurrent
+                                ? "border:2px solid #ffb300; background:#2b2b3d; border-radius:6px; padding:6px;"
+                                : "padding:6px;";
 
-                            <MudTimelineItem Color="@color" Size="Size.Small" Variant="@(isPassed ? Variant.Filled : Variant.Outlined)">
+                            <MudTimelineItem Color="@color" Size="Size.Small"
+                                             Variant="@(isPassed ? Variant.Filled : Variant.Outlined)">
                                 <ItemContent>
-                                    <div style="padding: 6px; cursor: pointer; @borderStyle" @onclick="() => SetStep(index)">
-                                        <MudStack Row="true" Justify="Justify.SpaceBetween">
-                                            <MudText Typo="Typo.subtitle2" Color="@(isPassed ? Color.Inherit : Color.Secondary)">
+                                    <div style="cursor:pointer; @borderStyle" @onclick="() => SetStep(index)">
+                                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                                            <MudText Typo="Typo.subtitle2"
+                                                     Color="@(isPassed ? Color.Inherit : Color.Secondary)">
                                                 @evt.TechniqueId — @(evt.Outcome.ToUpperInvariant())
+                                                @if (isBookmarked) { <span> 📌</span> }
                                             </MudText>
                                             <MudText Typo="Typo.caption" Color="Color.Secondary">
                                                 T+@(evt.TimestampOffsetMs / 60000)m
                                             </MudText>
                                         </MudStack>
-                                        <MudText Typo="Typo.body2" Color="@(isPassed ? Color.Inherit : Color.Secondary)">
+                                        <MudText Typo="Typo.body2"
+                                                 Color="@(isPassed ? Color.Inherit : Color.Secondary)"
+                                                 Style="font-size:11px;">
                                             @evt.Message
                                         </MudText>
                                     </div>
@@ -105,137 +220,164 @@ else
             </MudCard>
         </MudItem>
 
-        <!-- Right Column: Interactive Territory Map -->
+        <!-- Right: SVG Territory Map -->
         <MudItem xs="12" md="8">
-            <MudPaper Class="pa-2" Style="background:#11111b; overflow:auto; max-height:650px;">
-                <MudStack Row="true" Justify="Justify.SpaceBetween" Class="px-3 py-1">
-                    <MudText Typo="Typo.h6">Territory Map (SVG Visualizer)</MudText>
-                    <MudStack Row="true" Spacing="2">
-                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#d32f2f; margin-right:4px;"></span> Conquered</span>
-                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#2e7d32; margin-right:4px;"></span> Active Defense</span>
-                        <span style="font-size:11px; display:inline-flex; align-items:center;"><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:#757575; margin-right:4px;"></span> Isolated Node</span>
+            <MudPaper Style="background:#11111b; border:1px solid #2d2d4e; overflow:auto; height:620px;">
+                <!-- Map Header + Legend -->
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center"
+                          Class="px-3 py-2" Wrap="Wrap.Wrap">
+                    <MudText Typo="Typo.h6">🗺️ Territory Map</MudText>
+                    <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
+                        @foreach (var (label, color) in _legend)
+                        {
+                            <span style="font-size:11px; display:inline-flex; align-items:center; gap:4px;">
+                                <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:@color;"></span>
+                                @label
+                            </span>
+                        }
                     </MudStack>
                 </MudStack>
 
-                <svg width="100%" height="@_layout.Height" viewBox="0 0 @_layout.Width @_layout.Height" style="min-width:@(_layout.Width)px">
-                    <!-- Draw Zones -->
+                <!-- Current Event Callout -->
+                @if (_currentStepIndex >= 0 && _currentStepIndex < _filteredEvents.Count)
+                {
+                    var cur = _filteredEvents[_currentStepIndex];
+                    var calloutColor = cur.Actor == "red" ? "#c62828" : "#1565c0";
+                    var calloutBorder = cur.Actor == "red" ? "#ef5350" : "#42a5f5";
+                    <div style="margin:0 12px 8px; padding:8px 12px; background:@calloutColor; border-left:3px solid @calloutBorder; border-radius:4px; font-size:12px;">
+                        <strong>[@cur.Actor.ToUpperInvariant()] @cur.TechniqueId</strong> — @cur.Message
+                    </div>
+                }
+
+                <svg width="100%" height="@(_layout.Height + 20)"
+                     viewBox="0 0 @_layout.Width @(_layout.Height + 20)"
+                     style="min-width:@(_layout.Width)px; display:block;">
+
+                    <!-- Zone backgrounds -->
                     @foreach (var zone in _layout.Zones)
                     {
-                        <rect x="@(zone.X - 8)" y="@(zone.Y - 24)" width="@zone.Width" height="@(zone.Height + 28)"
-                              fill="#1e1e2e" stroke="#333" stroke-width="1" rx="6" opacity="0.45" />
-                        @((MarkupString)$"<text x=\"{zone.X}\" y=\"{zone.Y - 8}\" fill=\"#aaa\" font-size=\"10\" font-weight=\"bold\">{Truncate(zone.Zone, 22)}</text>")
+                        var zoneCompromised = _layout.Nodes
+                            .Where(n => n.Zone == zone.Zone)
+                            .Any(n => IsCompromised(n.Id));
+                        var zoneFill = zoneCompromised ? "#2a1010" : "#1e1e2e";
+                        var zoneStroke = zoneCompromised ? "#c62828" : "#333";
+
+                        <rect x="@(zone.X - 8)" y="@(zone.Y - 24)"
+                              width="@zone.Width" height="@(zone.Height + 28)"
+                              fill="@zoneFill" stroke="@zoneStroke" stroke-width="1" rx="6" opacity="0.55" />
+                        @((MarkupString)$"<text x=\"{zone.X}\" y=\"{zone.Y - 9}\" fill=\"#aaa\" font-size=\"10\" font-weight=\"bold\">{Truncate(zone.Zone, 22)}</text>")
                     }
 
-                    <!-- Draw Subnet Connection Edges -->
+                    <!-- Edges -->
                     @foreach (var edge in _layout.Edges)
                     {
-                        if (_layout.Positions.TryGetValue(edge.FromNodeId, out var f) &&
-                            _layout.Positions.TryGetValue(edge.ToNodeId, out var t))
-                        {
-                            var fromComp = IsCompromised(edge.FromNodeId);
-                            var toComp = IsCompromised(edge.ToNodeId);
-                            
-                            var edgeColor = "#555";
-                            var strokeWidth = "1";
-                            var dashArray = "";
+                        if (!_layout.Positions.TryGetValue(edge.FromNodeId, out var f) ||
+                            !_layout.Positions.TryGetValue(edge.ToNodeId, out var t))
+                            continue;
 
-                            if (IsIsolated(edge.FromNodeId) || IsIsolated(edge.ToNodeId))
-                            {
-                                edgeColor = "#444";
-                                dashArray = "4,4";
-                            }
-                            else if (fromComp && toComp)
-                            {
-                                edgeColor = "#ef5350"; // Pulsing red connection
-                                strokeWidth = "2";
-                            }
-                            else if (edge.Kind == "identity")
-                            {
-                                edgeColor = "#ab47bc";
-                            }
-                            else if (edge.Kind == "data")
-                            {
-                                edgeColor = "#26a69a";
-                            }
+                        var fromComp = IsCompromised(edge.FromNodeId);
+                        var toComp = IsCompromised(edge.ToNodeId);
+                        var fromIso = IsIsolated(edge.FromNodeId);
+                        var toIso = IsIsolated(edge.ToNodeId);
 
-                            <line x1="@f.X" y1="@f.Y" x2="@t.X" y2="@t.Y" 
-                                  stroke="@edgeColor" stroke-width="@strokeWidth" stroke-dasharray="@dashArray" opacity="0.65" />
-                        }
-                    }
-
-                    <!-- Draw Dynamic Animated Nodes -->
-                    @foreach (var node in _layout.Nodes)
-                    {
-                        if (!_layout.Positions.TryGetValue(node.Id, out var pos)) continue;
-                        
-                        var state = GetNodeState(node.Id);
-                        var fill = "#1565c0"; // Blue default
-                        var stroke = "#ffffff";
+                        string edgeColor;
                         var strokeWidth = "1";
-                        var nodeStrokeDash = "";
-                        var glowClass = "";
+                        var dashArray = "";
+                        var opacity = "0.55";
 
-                        if (state == "foothold")
+                        if (fromIso || toIso)
                         {
-                            fill = "#e53935"; // Bright Red
-                            stroke = "#ffeb3b"; // Yellow outline
-                            strokeWidth = "2";
-                            glowClass = "glow-red";
+                            edgeColor = "#333";
+                            dashArray = "4,4";
                         }
-                        else if (state == "compromised")
+                        else if (fromComp && toComp)
                         {
-                            fill = "#c62828"; // Dark Red
-                            stroke = "#ef5350";
+                            edgeColor = "#ef5350";
                             strokeWidth = "2";
-                            glowClass = "glow-red";
-                        }
-                        else if (state == "blocked")
-                        {
-                            fill = "#2e7d32"; // Rich Green EDR
-                            stroke = "#81c784";
-                            strokeWidth = "2";
-                        }
-                        else if (state == "isolated")
-                        {
-                            fill = "#424242"; // Isolated Steel Gray
-                            stroke = "#757575";
-                            strokeWidth = "1.5";
-                            nodeStrokeDash = "2,2";
+                            opacity = "0.85";
                         }
                         else
                         {
-                            // Standard node color types
-                            fill = node.NodeType switch
+                            edgeColor = edge.Kind switch
                             {
-                                "Control" => "#2e7d32",
-                                "Network" => "#6a1b9a",
-                                _ when node.CriticalityWeight >= 0.9m => "#d84315", // Crown Jewel Orange
-                                _ when node.CriticalityWeight >= 0.7m => "#ff8f00",
-                                _ => "#1565c0"
+                                "identity" => "#ab47bc",
+                                "data" => "#26a69a",
+                                "deploy" => "#ff8f00",
+                                "protects" => "#43a047",
+                                "monitoring" => "#1e88e5",
+                                _ => "#555"
                             };
                         }
 
-                        <g transform="translate(@pos.X,@pos.Y)" class="@glowClass">
-                            <circle r="14" fill="@fill" stroke="@stroke" stroke-width="@strokeWidth" stroke-dasharray="@nodeStrokeDash" opacity="0.95" />
-                            
-                            <!-- Overlay Special Icons -->
-                            @{
-                                string iconHtml;
-                                if (state == "isolated")
-                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-weight=\"bold\" font-family=\"Segoe UI Symbol\">🔒</text>";
-                                else if (state == "blocked")
-                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-weight=\"bold\" font-family=\"Segoe UI Symbol\">🛡️</text>";
-                                else if (node.CriticalityWeight >= 0.9m)
-                                    iconHtml = "<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"10\" font-weight=\"bold\">👑</text>";
-                                else
+                        <line x1="@f.X" y1="@f.Y" x2="@t.X" y2="@t.Y"
+                              stroke="@edgeColor" stroke-width="@strokeWidth"
+                              stroke-dasharray="@dashArray" opacity="@opacity" />
+                    }
+
+                    <!-- Nodes -->
+                    @foreach (var node in _layout.Nodes)
+                    {
+                        if (!_layout.Positions.TryGetValue(node.Id, out var pos)) continue;
+
+                        var state = GetNodeState(node.Id);
+                        var isCurrentNode = _currentStepIndex >= 0
+                            && _currentStepIndex < _filteredEvents.Count
+                            && _filteredEvents[_currentStepIndex].NodeId == node.Id;
+
+                        string fill, stroke;
+                        var strokeWidth = "1";
+                        var dashArray = "";
+                        var glowClass = "";
+                        var radius = isCurrentNode ? "17" : "14";
+
+                        switch (state)
+                        {
+                            case "foothold":
+                                fill = "#e53935"; stroke = "#ffeb3b"; strokeWidth = "2.5"; glowClass = "glow-red";
+                                break;
+                            case "compromised":
+                                fill = "#c62828"; stroke = "#ef5350"; strokeWidth = "2"; glowClass = "glow-red";
+                                break;
+                            case "blocked":
+                                fill = "#2e7d32"; stroke = "#81c784"; strokeWidth = "2"; glowClass = "glow-green";
+                                break;
+                            case "isolated":
+                                fill = "#37474f"; stroke = "#78909c"; strokeWidth = "1.5"; dashArray = "3,2";
+                                break;
+                            default:
+                                fill = node.NodeType switch
                                 {
-                                    var abbr = node.DisplayName.Substring(0, Math.Min(2, node.DisplayName.Length));
-                                    iconHtml = $"<text x=\"-4\" y=\"4\" fill=\"#fff\" font-size=\"9\" opacity=\"0.6\">{abbr}</text>";
-                                }
+                                    "Control" => "#2e7d32",
+                                    "Network" => "#6a1b9a",
+                                    _ when node.CriticalityWeight >= 0.9m => "#bf360c",
+                                    _ when node.CriticalityWeight >= 0.7m => "#e65100",
+                                    _ => "#1565c0"
+                                };
+                                stroke = "#ffffff";
+                                break;
+                        }
+
+                        // Pulse ring for current active node
+                        if (isCurrentNode)
+                        {
+                            @((MarkupString)$"<circle cx=\"{pos.X}\" cy=\"{pos.Y}\" r=\"22\" fill=\"none\" stroke=\"#ffb300\" stroke-width=\"1.5\" opacity=\"0.6\" class=\"pulse-ring\" />")
+                        }
+
+                        <g transform="translate(@pos.X,@pos.Y)" class="@glowClass">
+                            <circle r="@radius" fill="@fill" stroke="@stroke"
+                                    stroke-width="@strokeWidth" stroke-dasharray="@dashArray" opacity="0.95" />
+                            @{
+                                string iconHtml = state switch
+                                {
+                                    "isolated" => $"<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-family=\"Segoe UI Symbol\">🔒</text>",
+                                    "blocked" => $"<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-family=\"Segoe UI Symbol\">🛡️</text>",
+                                    "foothold" or "compromised" => $"<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"11\" font-family=\"Segoe UI Symbol\">💀</text>",
+                                    _ when node.CriticalityWeight >= 0.9m => $"<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"10\">👑</text>",
+                                    _ => $"<text x=\"-4\" y=\"4\" fill=\"#fff\" font-size=\"9\" opacity=\"0.7\">{Truncate(node.DisplayName, 2)}</text>"
+                                };
                             }
                             @((MarkupString)iconHtml)
-
-                            <title>@node.DisplayName (@node.NodeType) | State: @(state.ToUpperInvariant())</title>
+                            <title>@node.DisplayName (@node.NodeType) | Zone: @node.Zone | State: @(state.ToUpperInvariant())</title>
                         </g>
                     }
                 </svg>
@@ -243,130 +385,264 @@ else
         </MudItem>
     </MudGrid>
 
+    <!-- Score Dimension Summary Bar -->
+    @if (_scoreDetail is not null)
+    {
+        <MudPaper Class="pa-3 mt-2" Style="background:#1a1a2e; border:1px solid #2d2d4e;">
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Resilience Dimensions — Run @_run.RunIndex</MudText>
+            <MudGrid Spacing="2">
+                @foreach (var (label, value, color) in DimensionBars())
+                {
+                    <MudItem xs="12" sm="6" md="2">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@label</MudText>
+                        <MudProgressLinear Value="@((double)value)" Color="@color" Rounded="true" Size="Size.Medium" Class="mt-1" />
+                        <MudText Typo="Typo.caption">@value.ToString("F0")</MudText>
+                    </MudItem>
+                }
+                <MudItem xs="12" sm="6" md="2">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Composite R</MudText>
+                    <MudProgressLinear Value="@((double)(_run.ResilienceScore ?? 0))" Color="Color.Warning" Rounded="true" Size="Size.Medium" Class="mt-1" />
+                    <MudText Typo="Typo.caption"><strong>@_run.ResilienceScore</strong></MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    }
+
+    <!-- Keyboard shortcut hint -->
+    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+        ⌨️ Keyboard: <kbd>Space</kbd> Play/Pause &nbsp; <kbd>←</kbd> Step back &nbsp; <kbd>→</kbd> Step forward &nbsp; <kbd>R</kbd> Reset &nbsp; <kbd>B</kbd> Bookmark
+    </MudText>
+
     <style>
         @@keyframes pulse-red {
-            0% {
-                filter: drop-shadow(0 0 2px rgba(229, 57, 53, 0.6));
-            }
-            50% {
-                filter: drop-shadow(0 0 10px rgba(229, 57, 53, 0.9));
-            }
-            100% {
-                filter: drop-shadow(0 0 2px rgba(229, 57, 53, 0.6));
-            }
+            0%   { filter: drop-shadow(0 0 2px rgba(229,57,53,0.5)); }
+            50%  { filter: drop-shadow(0 0 12px rgba(229,57,53,1)); }
+            100% { filter: drop-shadow(0 0 2px rgba(229,57,53,0.5)); }
         }
-        .glow-red {
-            animation: pulse-red 1.5s infinite;
+        @@keyframes pulse-green {
+            0%   { filter: drop-shadow(0 0 2px rgba(46,125,50,0.5)); }
+            50%  { filter: drop-shadow(0 0 10px rgba(76,175,80,0.9)); }
+            100% { filter: drop-shadow(0 0 2px rgba(46,125,50,0.5)); }
+        }
+        @@keyframes pulse-ring {
+            0%   { opacity: 0.7; r: 18; }
+            100% { opacity: 0; r: 26; }
+        }
+        .glow-red   { animation: pulse-red   1.4s ease-in-out infinite; }
+        .glow-green { animation: pulse-green 1.8s ease-in-out infinite; }
+        .pulse-ring { animation: pulse-ring  1.2s ease-out infinite; }
+        kbd {
+            background: #2d2d4e; border: 1px solid #555; border-radius: 3px;
+            padding: 1px 5px; font-size: 11px; font-family: monospace;
         }
     </style>
 }
 
 @code {
-    private AgenticSecuritySimulator.Core.Entities.SimulationRun? _run;
-    private List<SimulationEvent> _events = new();
+    // ── State ──────────────────────────────────────────────────────────────
+    private SimulationRun? _run;
+    private ResilienceScoreDetail? _scoreDetail;
+    private List<SimulationEvent> _allEvents = [];
+    private List<SimulationEvent> _filteredEvents = [];
     private TopologyLayout? _layout;
     private Dictionary<Guid, string> _nodeStates = new();
-    private int _currentStepIndex = -1; // -1 means initial baseline state
-    private bool _isPlaying = false;
-    private int _playbackSpeedMs = 1500;
+    private ReplaySession _session = null!;
+    private bool _loading = true;
+    private bool _isPlaying;
+    private int _currentStepIndex = -1;
+    private int _playbackSpeedMs = 1200;
 
+    private string _runMode = "median";
+    private string _actorFilter = "all";
+
+    private static readonly (string Label, string Color)[] _legend =
+    [
+        ("Foothold", "#e53935"),
+        ("Compromised", "#c62828"),
+        ("Blocked", "#2e7d32"),
+        ("Isolated", "#37474f"),
+        ("Crown Jewel", "#bf360c"),
+        ("High", "#e65100"),
+        ("Normal", "#1565c0"),
+    ];
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
-        if (State.LastBatchId is Guid batchId)
+        if (State.LastBatchId is not Guid batchId)
         {
-            var batch = await Sims.GetBatchAsync(batchId);
-            if (batch?.Runs.Count > 0)
+            _loading = false;
+            return;
+        }
+
+        _session = ReplayState.GetOrCreate(batchId);
+        _currentStepIndex = _session.CurrentStep;
+        _playbackSpeedMs = _session.SpeedMs;
+        _runMode = _session.RunMode;
+
+        await LoadRunAsync(batchId);
+        _loading = false;
+    }
+
+    private async Task LoadRunAsync(Guid batchId)
+    {
+        var batch = await Sims.GetBatchAsync(batchId);
+        if (batch is null) return;
+
+        var ordered = batch.Runs
+            .Where(r => r.ResilienceScore.HasValue)
+            .OrderBy(r => r.ResilienceScore)
+            .ToList();
+
+        if (ordered.Count == 0) return;
+
+        _run = _runMode switch
+        {
+            "worst" => ordered[0],
+            "best"  => ordered[^1],
+            _       => ordered[ordered.Count / 2]
+        };
+
+        _allEvents = await Db.SimulationEvents
+            .Where(e => e.RunId == _run.Id)
+            .OrderBy(e => e.Sequence)
+            .ToListAsync();
+
+        _scoreDetail = await Db.ResilienceScores
+            .FirstOrDefaultAsync(s => s.RunId == _run.Id);
+
+        var twin = await Db.Twins
+            .Include(t => t.Nodes)
+            .Include(t => t.Edges)
+            .FirstOrDefaultAsync(t => t.Id == batch.TwinId);
+
+        if (twin is not null)
+        {
+            _layout = LayoutService.Compute(twin, new TopologyViewOptions
             {
-                // Fetch the median run to replay
-                var ordered = batch.Runs
-                    .Where(r => r.ResilienceScore.HasValue)
-                    .OrderBy(r => r.ResilienceScore)
-                    .ToList();
-                _run = ordered[ordered.Count / 2];
+                ViewMode = TopologyViewMode.All,
+                MaxEdges = 300
+            });
+        }
 
-                // Load events of the target run
-                _events = await Db.SimulationEvents
-                    .Where(e => e.RunId == _run.Id)
-                    .OrderBy(e => e.Sequence)
-                    .ToListAsync();
+        ApplyFilter();
+        RecomputeNodeStates();
+    }
 
-                // Load Twin & Edges associated with this batch run
-                var twin = await Db.Twins
-                    .Include(t => t.Nodes)
-                    .Include(t => t.Edges)
-                    .FirstOrDefaultAsync(t => t.Id == batch.TwinId);
+    // ── Run mode / filter ──────────────────────────────────────────────────
+    private string _prevRunMode = "median";
+    private string _prevActorFilter = "all";
 
-                if (twin is not null)
-                {
-                    _layout = LayoutService.Compute(twin, new TopologyViewOptions
-                    {
-                        ViewMode = TopologyViewMode.All,
-                        MaxEdges = 300
-                    });
-                }
-
-                RecomputeNodeStates();
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_runMode != _prevRunMode)
+        {
+            _prevRunMode = _runMode;
+            _session.RunMode = _runMode;
+            if (State.LastBatchId is Guid bid)
+            {
+                Reset();
+                await LoadRunAsync(bid);
             }
+        }
+
+        if (_actorFilter != _prevActorFilter)
+        {
+            _prevActorFilter = _actorFilter;
+            ApplyFilter();
+            RecomputeNodeStates();
         }
     }
 
+    private void ApplyFilter()
+    {
+        _filteredEvents = _actorFilter == "all"
+            ? _allEvents
+            : _allEvents.Where(e => e.Actor == _actorFilter).ToList();
+
+        // Clamp step index to new filtered count
+        if (_currentStepIndex >= _filteredEvents.Count)
+            _currentStepIndex = _filteredEvents.Count - 1;
+    }
+
+    // ── Node state helpers ─────────────────────────────────────────────────
     private void RecomputeNodeStates()
     {
         _nodeStates.Clear();
-        for (var i = 0; i <= _currentStepIndex; i++)
+        for (var i = 0; i <= _currentStepIndex && i < _filteredEvents.Count; i++)
         {
-            var evt = _events[i];
+            var evt = _filteredEvents[i];
             if (evt.NodeId.HasValue)
-            {
                 _nodeStates[evt.NodeId.Value] = evt.Outcome.ToLowerInvariant();
-            }
         }
     }
 
-    private string GetNodeState(Guid nodeId)
-    {
-        return _nodeStates.TryGetValue(nodeId, out var state) ? state : "normal";
-    }
+    private string GetNodeState(Guid nodeId) =>
+        _nodeStates.TryGetValue(nodeId, out var s) ? s : "normal";
 
     private bool IsCompromised(Guid nodeId)
     {
         var s = GetNodeState(nodeId);
-        return s == "foothold" || s == "compromised";
+        return s is "foothold" or "compromised";
     }
 
-    private bool IsIsolated(Guid nodeId)
-    {
-        return GetNodeState(nodeId) == "isolated";
-    }
+    private bool IsIsolated(Guid nodeId) => GetNodeState(nodeId) == "isolated";
 
+    // ── Playback controls ──────────────────────────────────────────────────
     private async Task PlayAsync()
     {
-        if (_isPlaying) return;
+        if (_isPlaying || _filteredEvents.Count == 0) return;
+
+        _session.CancelPlay();
+        var cts = new CancellationTokenSource();
+        _session.PlayCts = cts;
+        _session.IsPlaying = true;
         _isPlaying = true;
 
-        while (_isPlaying && _currentStepIndex < _events.Count - 1)
+        try
         {
-            _currentStepIndex++;
-            RecomputeNodeStates();
-            StateHasChanged();
-            await Task.Delay(_playbackSpeedMs);
-        }
+            while (!cts.Token.IsCancellationRequested && _currentStepIndex < _filteredEvents.Count - 1)
+            {
+                _currentStepIndex++;
+                _session.CurrentStep = _currentStepIndex;
+                RecomputeNodeStates();
 
-        _isPlaying = false;
-        StateHasChanged();
+                // Broadcast to any other connected clients watching this batch
+                if (State.LastBatchId is Guid bid)
+                {
+                    var evt = _filteredEvents[_currentStepIndex];
+                    await ReplayHub.BroadcastStep(HubCtx, bid.ToString(), new ReplayStepDto(
+                        _currentStepIndex, _filteredEvents.Count,
+                        evt.Actor, evt.TechniqueId, evt.NodeId?.ToString(),
+                        evt.Outcome, evt.Message, evt.TimestampOffsetMs));
+                }
+
+                StateHasChanged();
+                await Task.Delay(_playbackSpeedMs, cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _isPlaying = false;
+            _session.IsPlaying = false;
+            StateHasChanged();
+        }
     }
 
     private void Pause()
     {
+        _session.CancelPlay();
         _isPlaying = false;
     }
 
     private void StepForward()
     {
         Pause();
-        if (_currentStepIndex < _events.Count - 1)
+        if (_currentStepIndex < _filteredEvents.Count - 1)
         {
             _currentStepIndex++;
+            _session.CurrentStep = _currentStepIndex;
             RecomputeNodeStates();
         }
     }
@@ -377,6 +653,7 @@ else
         if (_currentStepIndex > -1)
         {
             _currentStepIndex--;
+            _session.CurrentStep = _currentStepIndex;
             RecomputeNodeStates();
         }
     }
@@ -385,6 +662,15 @@ else
     {
         Pause();
         _currentStepIndex = -1;
+        _session.CurrentStep = -1;
+        RecomputeNodeStates();
+    }
+
+    private void JumpToEnd()
+    {
+        Pause();
+        _currentStepIndex = _filteredEvents.Count - 1;
+        _session.CurrentStep = _currentStepIndex;
         RecomputeNodeStates();
     }
 
@@ -392,9 +678,53 @@ else
     {
         Pause();
         _currentStepIndex = index;
+        _session.CurrentStep = index;
         RecomputeNodeStates();
     }
 
+    private void OnScrub(int value)
+    {
+        SetStep(value - 1);
+    }
+
+    // ── Bookmarks ──────────────────────────────────────────────────────────
+    private void ToggleBookmark()
+    {
+        if (_currentStepIndex < 0) return;
+        if (!_session.Bookmarks.Remove(_currentStepIndex))
+            _session.Bookmarks.Add(_currentStepIndex);
+    }
+
+    private void PrevBookmark()
+    {
+        var prev = _session.Bookmarks.Where(b => b < _currentStepIndex).OrderByDescending(b => b).FirstOrDefault(-1);
+        if (prev >= 0) SetStep(prev);
+    }
+
+    private void NextBookmark()
+    {
+        var next = _session.Bookmarks.Where(b => b > _currentStepIndex).OrderBy(b => b).FirstOrDefault(-1);
+        if (next >= 0) SetStep(next);
+    }
+
+    // ── Dimension bars ─────────────────────────────────────────────────────
+    private IEnumerable<(string Label, decimal Value, Color Color)> DimensionBars()
+    {
+        if (_scoreDetail is null) yield break;
+        yield return ("Availability",  _scoreDetail.Availability  * 100, Color.Success);
+        yield return ("Detection",     _scoreDetail.Detection     * 100, Color.Info);
+        yield return ("Containment",   _scoreDetail.Containment   * 100, Color.Primary);
+        yield return ("Recovery",      _scoreDetail.Recovery      * 100, Color.Secondary);
+        yield return ("Blast Radius ↓", (1 - _scoreDetail.BlastRadius) * 100, Color.Error);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────
     private static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..(max - 1)] + "…";
+        value.Length <= max ? value : value[..max];
+
+    public async ValueTask DisposeAsync()
+    {
+        _session.CancelPlay();
+        await Task.CompletedTask;
+    }
 }

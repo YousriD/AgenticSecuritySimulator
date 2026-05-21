@@ -5,7 +5,6 @@ using AgenticSecuritySimulator.Simulation;
 using AgenticSecuritySimulator.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
-
 namespace AgenticSecuritySimulator.Web.Services;
 
 public sealed class BatchRunService(
@@ -21,6 +20,7 @@ public sealed class BatchRunService(
         int runCount,
         int seed,
         IProgress<string>? progress = null,
+        IProgress<SimulationRunResult>? runProgress = null,
         CancellationToken ct = default)
     {
         progress?.Report("Loading twin…");
@@ -47,7 +47,7 @@ public sealed class BatchRunService(
         logger.LogInformation("Starting batch: twin={TwinId}, runs={RunCount}", twinId, runCount);
 
         var computed = await Task.Run(
-            () => orchestrator.RunBatchAsync(twin, scenarios, scenarioIds, parameters, runCount, seed, ct),
+            () => orchestrator.RunBatchAsync(twin, scenarios, scenarioIds, parameters, runCount, seed, runProgress, ct),
             ct);
 
         progress?.Report("Saving results…");

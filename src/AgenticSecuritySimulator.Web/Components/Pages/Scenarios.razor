@@ -1,11 +1,17 @@
 @page "/scenarios"
 @rendermode InteractiveServer
+@using AgenticSecuritySimulator.Core.Entities
+@using AgenticSecuritySimulator.Simulation
 @inject SimulationService Sims
+@inject TopologyLayoutService LayoutService
 @inject AppState State
+@inject AppDbContext Db
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject IConfiguration Config
 @inject ILogger<Scenarios> Logger
+@using AgenticSecuritySimulator.Web.Data
+@using Microsoft.EntityFrameworkCore
 
 <PageTitle>Scenarios</PageTitle>
 
@@ -32,12 +38,8 @@ else
         Twin ready — <MudLink Href="/topology">view topology</MudLink>
     </MudAlert>
 
-    @if (!string.IsNullOrEmpty(_status))
-    {
-        <MudAlert Severity="Severity.Info" Class="mb-3">@_status</MudAlert>
-    }
-
     <MudGrid>
+        <!-- Scenario selection -->
         <MudItem xs="12" md="6">
             <MudText Typo="Typo.h6" Class="mb-2">Top 5 scenarios (@SelectedCount selected)</MudText>
             <MudStack Spacing="1">
@@ -57,6 +59,7 @@ else
             </MudStack>
         </MudItem>
 
+        <!-- Run settings -->
         <MudItem xs="12" md="6">
             <MudText Typo="Typo.h6" Class="mb-2">Run settings</MudText>
             <MudButtonGroup Variant="Variant.Outlined" Class="mb-2" Disabled="_busy">
@@ -78,7 +81,7 @@ else
                 @if (_busy)
                 {
                     <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                    <span>@_status</span>
+                    <span>@_statusMsg</span>
                 }
                 else
                 {
@@ -87,9 +90,234 @@ else
             </MudButton>
         </MudItem>
     </MudGrid>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         LIVE SIMULATION PANEL — visible while batch is running
+         ═══════════════════════════════════════════════════════════════════ -->
+    @if (_busy || _liveRunsCompleted > 0)
+    {
+        <MudDivider Class="my-4" />
+        <MudText Typo="Typo.h6" Class="mb-2">
+            ⚡ Live Simulation Feed
+            @if (_busy)
+            {
+                <MudChip T="string" Color="Color.Error" Size="Size.Small" Class="ml-2" Variant="Variant.Filled">RUNNING</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Color="Color.Success" Size="Size.Small" Class="ml-2" Variant="Variant.Filled">COMPLETE</MudChip>
+            }
+        </MudText>
+
+        <!-- Progress bar + counters -->
+        <MudPaper Class="pa-3 mb-3" Style="background:#1a1a2e; border:1px solid #2d2d4e;">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2" Wrap="Wrap.Wrap" Spacing="2">
+                <MudText Typo="Typo.body2">
+                    Runs: <strong style="color:#fff;">@_liveRunsCompleted</strong> / @_runCount
+                </MudText>
+                <MudStack Row="true" Spacing="3">
+                    <MudText Typo="Typo.body2">
+                        Mean R: <strong style="color:@ScoreColor(_liveMeanScore);">@_liveMeanScore.ToString("F1")</strong>
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        Min: <strong style="color:#ef5350;">@_liveMinScore.ToString("F1")</strong>
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        Max: <strong style="color:#66bb6a;">@_liveMaxScore.ToString("F1")</strong>
+                    </MudText>
+                </MudStack>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Last: @_liveLastScenario
+                </MudText>
+            </MudStack>
+            <MudProgressLinear Value="@LiveProgressPct" Color="Color.Error" Rounded="true" Size="Size.Medium" />
+        </MudPaper>
+
+        <!-- Two-column live view: event feed + topology map -->
+        <MudGrid Spacing="2">
+            <!-- Live event feed -->
+            <MudItem xs="12" md="4">
+                <MudCard Style="height:520px; overflow-y:auto; background:#181824; border:1px solid #2d2d4e;" id="live-feed">
+                    <MudCardHeader>
+                        <CardHeaderContent>
+                            <MudText Typo="Typo.subtitle1">📋 Latest Run Events</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Run #@_liveRunIndex — @_liveScenarioId
+                            </MudText>
+                        </CardHeaderContent>
+                    </MudCardHeader>
+                    <MudCardContent Class="pa-2">
+                        @if (_liveEvents.Count == 0)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="pa-2">Waiting for first run…</MudText>
+                        }
+                        else
+                        {
+                            <MudTimeline TimelinePosition="TimelinePosition.Start" TimelineAlign="TimelineAlign.Start">
+                                @foreach (var evt in _liveEvents)
+                                {
+                                    var color = evt.Actor == "red" ? Color.Error : Color.Info;
+                                    <MudTimelineItem Color="@color" Size="Size.Small" Variant="Variant.Filled">
+                                        <ItemContent>
+                                            <div style="padding:4px;">
+                                                <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                                    <MudText Typo="Typo.subtitle2">
+                                                        @evt.TechniqueId — @(evt.Outcome.ToUpperInvariant())
+                                                    </MudText>
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                        T+@(evt.TimestampOffsetMs / 60000)m
+                                                    </MudText>
+                                                </MudStack>
+                                                <MudText Typo="Typo.body2" Style="font-size:11px;">@evt.Message</MudText>
+                                            </div>
+                                        </ItemContent>
+                                    </MudTimelineItem>
+                                }
+                            </MudTimeline>
+                        }
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+
+            <!-- Live topology map -->
+            <MudItem xs="12" md="8">
+                <MudPaper Style="background:#11111b; border:1px solid #2d2d4e; overflow:auto; height:520px;">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="px-3 py-2">
+                        <MudText Typo="Typo.subtitle1">🗺️ Live Territory Map</MudText>
+                        <MudStack Row="true" Spacing="2">
+                            @foreach (var (label, color) in _mapLegend)
+                            {
+                                <span style="font-size:11px; display:inline-flex; align-items:center; gap:3px;">
+                                    <span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:@color;"></span>
+                                    @label
+                                </span>
+                            }
+                        </MudStack>
+                    </MudStack>
+
+                    @if (_liveLayout is not null)
+                    {
+                        <svg width="100%" height="@_liveLayout.Height"
+                             viewBox="0 0 @_liveLayout.Width @_liveLayout.Height"
+                             style="min-width:@(_liveLayout.Width)px; display:block;">
+
+                            @foreach (var zone in _liveLayout.Zones)
+                            {
+                                var anyComp = _liveLayout.Nodes.Where(n => n.Zone == zone.Zone).Any(n => LiveIsCompromised(n.Id));
+                                <rect x="@(zone.X - 8)" y="@(zone.Y - 24)"
+                                      width="@zone.Width" height="@(zone.Height + 28)"
+                                      fill="@(anyComp ? "#2a1010" : "#1e1e2e")"
+                                      stroke="@(anyComp ? "#c62828" : "#333")"
+                                      stroke-width="1" rx="6" opacity="0.55" />
+                                @((MarkupString)$"<text x=\"{zone.X}\" y=\"{zone.Y - 9}\" fill=\"#aaa\" font-size=\"10\" font-weight=\"bold\">{LiveTruncate(zone.Zone, 22)}</text>")
+                            }
+
+                            @foreach (var edge in _liveLayout.Edges)
+                            {
+                                if (!_liveLayout.Positions.TryGetValue(edge.FromNodeId, out var f) ||
+                                    !_liveLayout.Positions.TryGetValue(edge.ToNodeId, out var t))
+                                    continue;
+
+                                var fc = LiveIsCompromised(edge.FromNodeId);
+                                var tc = LiveIsCompromised(edge.ToNodeId);
+                                var fi = LiveIsIsolated(edge.FromNodeId);
+                                var ti = LiveIsIsolated(edge.ToNodeId);
+
+                                var stroke = (fi || ti) ? "#333" : (fc && tc) ? "#ef5350" : edge.Kind switch
+                                {
+                                    "identity" => "#ab47bc",
+                                    "data" => "#26a69a",
+                                    "deploy" => "#ff8f00",
+                                    "protects" => "#43a047",
+                                    _ => "#555"
+                                };
+                                var sw = (fc && tc) ? "2" : "1";
+                                var dash = (fi || ti) ? "4,4" : "";
+
+                                <line x1="@f.X" y1="@f.Y" x2="@t.X" y2="@t.Y"
+                                      stroke="@stroke" stroke-width="@sw"
+                                      stroke-dasharray="@dash" opacity="0.55" />
+                            }
+
+                            @foreach (var node in _liveLayout.Nodes)
+                            {
+                                if (!_liveLayout.Positions.TryGetValue(node.Id, out var pos)) continue;
+                                var state = LiveGetNodeState(node.Id);
+
+                                string fill, stroke;
+                                var sw = "1"; var dash = ""; var glow = "";
+
+                                switch (state)
+                                {
+                                    case "foothold":
+                                        fill = "#e53935"; stroke = "#ffeb3b"; sw = "2.5"; glow = "lglow-red"; break;
+                                    case "compromised":
+                                        fill = "#c62828"; stroke = "#ef5350"; sw = "2"; glow = "lglow-red"; break;
+                                    case "blocked":
+                                        fill = "#2e7d32"; stroke = "#81c784"; sw = "2"; glow = "lglow-green"; break;
+                                    case "isolated":
+                                        fill = "#37474f"; stroke = "#78909c"; sw = "1.5"; dash = "3,2"; break;
+                                    default:
+                                        fill = node.NodeType switch
+                                        {
+                                            "Control" => "#2e7d32",
+                                            "Network" => "#6a1b9a",
+                                            _ when node.CriticalityWeight >= 0.9m => "#bf360c",
+                                            _ when node.CriticalityWeight >= 0.7m => "#e65100",
+                                            _ => "#1565c0"
+                                        };
+                                        stroke = "#fff"; break;
+                                }
+
+                                <g transform="translate(@pos.X,@pos.Y)" class="@glow">
+                                    <circle r="14" fill="@fill" stroke="@stroke"
+                                            stroke-width="@sw" stroke-dasharray="@dash" opacity="0.95" />
+                                    @{
+                                        var icon = state switch
+                                        {
+                                            "isolated" => "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-family=\"Segoe UI Symbol\">🔒</text>",
+                                            "blocked" => "<text x=\"-5\" y=\"4\" fill=\"#eee\" font-size=\"11\" font-family=\"Segoe UI Symbol\">🛡️</text>",
+                                            "foothold" or "compromised" => "<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"11\" font-family=\"Segoe UI Symbol\">💀</text>",
+                                            _ when node.CriticalityWeight >= 0.9m => "<text x=\"-5\" y=\"4\" fill=\"#fff\" font-size=\"10\">👑</text>",
+                                            _ => $"<text x=\"-4\" y=\"4\" fill=\"#fff\" font-size=\"9\" opacity=\"0.7\">{LiveTruncate(node.DisplayName, 2)}</text>"
+                                        };
+                                    }
+                                    @((MarkupString)icon)
+                                    <title>@node.DisplayName (@node.NodeType) | @(state.ToUpperInvariant())</title>
+                                </g>
+                            }
+                        </svg>
+                    }
+                    else
+                    {
+                        <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="height:400px;">
+                            <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">Loading topology…</MudText>
+                        </MudStack>
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <style>
+            @@keyframes lglow-red-anim {
+                0%   { filter: drop-shadow(0 0 2px rgba(229,57,53,0.5)); }
+                50%  { filter: drop-shadow(0 0 10px rgba(229,57,53,1)); }
+                100% { filter: drop-shadow(0 0 2px rgba(229,57,53,0.5)); }
+            }
+            @@keyframes lglow-green-anim {
+                0%   { filter: drop-shadow(0 0 2px rgba(46,125,50,0.5)); }
+                50%  { filter: drop-shadow(0 0 8px rgba(76,175,80,0.9)); }
+                100% { filter: drop-shadow(0 0 2px rgba(46,125,50,0.5)); }
+            }
+            .lglow-red   { animation: lglow-red-anim   1.4s ease-in-out infinite; }
+            .lglow-green { animation: lglow-green-anim 1.8s ease-in-out infinite; }
+        </style>
+    }
 }
 
 @code {
+    // ── Scenario / settings state ──────────────────────────────────────────
     private IReadOnlyList<ScenarioDefinition> _scenarios = [];
     private List<ScenarioSelection> _scenarioItems = [];
     private int _runCount = 100;
@@ -98,10 +326,37 @@ else
     private int _patchLag = 30;
     private bool _busy;
     private bool _loadingTwin;
-    private string _status = "";
+    private string _statusMsg = "";
 
     private int SelectedCount => _scenarioItems.Count(i => i.Selected);
 
+    // ── Live feed state ────────────────────────────────────────────────────
+    private TopologyLayout? _liveLayout;
+    private Dictionary<Guid, string> _liveNodeStates = new();
+    private List<SimulatedEvent> _liveEvents = [];
+    private int _liveRunsCompleted;
+    private int _liveRunIndex;
+    private string _liveScenarioId = "";
+    private string _liveLastScenario = "";
+    private decimal _liveMeanScore;
+    private decimal _liveMinScore = decimal.MaxValue;
+    private decimal _liveMaxScore;
+    private decimal _liveScoreSum;
+
+    // Throttle: only push a UI update every N runs to avoid flooding SignalR
+    private const int UiUpdateEveryNRuns = 5;
+
+    private double LiveProgressPct =>
+        _runCount == 0 ? 0 : Math.Min(100.0, _liveRunsCompleted * 100.0 / _runCount);
+
+    private static readonly (string Label, string Color)[] _mapLegend =
+    [
+        ("Foothold", "#e53935"), ("Compromised", "#c62828"),
+        ("Blocked", "#2e7d32"), ("Isolated", "#37474f"),
+        ("Crown Jewel", "#bf360c"), ("Normal", "#1565c0"),
+    ];
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
         _scenarios = await Sims.GetScenariosAsync();
@@ -114,12 +369,24 @@ else
 
         if (State.CurrentTwinId is null)
             await TryLoadLatestTwin();
+        else
+            await EnsureLiveLayoutAsync();
     }
 
-    private void SetRunCount(int count)
+    private async Task EnsureLiveLayoutAsync()
     {
-        _runCount = count;
+        if (_liveLayout is not null || State.CurrentTwinId is not Guid twinId) return;
+        var twin = await Db.Twins
+            .Include(t => t.Nodes)
+            .Include(t => t.Edges)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == twinId);
+        if (twin is not null)
+            _liveLayout = LayoutService.Compute(twin, new TopologyViewOptions { ViewMode = TopologyViewMode.All, MaxEdges = 300 });
     }
+
+    // ── Controls ───────────────────────────────────────────────────────────
+    private void SetRunCount(int count) => _runCount = count;
 
     private async Task TryLoadLatestTwin()
     {
@@ -131,26 +398,16 @@ else
             {
                 State.CurrentTwinId = latest.Value;
                 Snackbar.Add("Loaded latest twin.", Severity.Info);
+                await EnsureLiveLayoutAsync();
             }
         }
-        finally
-        {
-            _loadingTwin = false;
-        }
+        finally { _loadingTwin = false; }
     }
 
-    private void SelectAll()
-    {
-        foreach (var item in _scenarioItems)
-            item.Selected = true;
-    }
+    private void SelectAll()  { foreach (var i in _scenarioItems) i.Selected = true; }
+    private void SelectNone() { foreach (var i in _scenarioItems) i.Selected = false; }
 
-    private void SelectNone()
-    {
-        foreach (var item in _scenarioItems)
-            item.Selected = false;
-    }
-
+    // ── Run ────────────────────────────────────────────────────────────────
     private async Task RunSimulationAsync()
     {
         if (State.CurrentTwinId is not Guid twinId)
@@ -166,17 +423,58 @@ else
             return;
         }
 
+        // Reset live state
+        _liveRunsCompleted = 0;
+        _liveRunIndex = 0;
+        _liveScenarioId = "";
+        _liveLastScenario = "";
+        _liveMeanScore = 0;
+        _liveMinScore = decimal.MaxValue;
+        _liveMaxScore = 0;
+        _liveScoreSum = 0;
+        _liveEvents.Clear();
+        _liveNodeStates.Clear();
+
+        await EnsureLiveLayoutAsync();
+
         _busy = true;
-        _status = "Starting…";
+        _statusMsg = "Starting…";
         await InvokeAsync(StateHasChanged);
 
         try
         {
-            var progress = new Progress<string>(async msg =>
+            var statusProgress = new Progress<string>(async msg =>
             {
-                _status = msg;
+                _statusMsg = msg;
                 try { await InvokeAsync(StateHasChanged); }
-                catch (ObjectDisposedException) { /* circuit closed */ }
+                catch (ObjectDisposedException) { }
+            });
+
+            // Per-run live progress — called from background thread, marshal to UI thread
+            var runProgress = new Progress<SimulationRunResult>(result =>
+            {
+                _liveRunsCompleted++;
+                _liveScoreSum += result.Scores.Composite;
+                _liveMeanScore = Math.Round(_liveScoreSum / _liveRunsCompleted, 1);
+                if (result.Scores.Composite < _liveMinScore) _liveMinScore = result.Scores.Composite;
+                if (result.Scores.Composite > _liveMaxScore) _liveMaxScore = result.Scores.Composite;
+                _liveLastScenario = result.ScenarioId;
+
+                // Update the topology map with this run's events every N runs
+                if (_liveRunsCompleted % UiUpdateEveryNRuns == 0 || _liveRunsCompleted == 1)
+                {
+                    _liveRunIndex = result.RunIndex;
+                    _liveScenarioId = result.ScenarioId;
+                    _liveEvents = result.Events.ToList();
+                    _liveNodeStates = BuildNodeStates(result.Events);
+                }
+
+                // Throttle StateHasChanged to avoid flooding the circuit
+                if (_liveRunsCompleted % UiUpdateEveryNRuns == 0 || _liveRunsCompleted == 1)
+                {
+                    try { InvokeAsync(StateHasChanged).GetAwaiter().GetResult(); }
+                    catch (ObjectDisposedException) { }
+                }
             });
 
             var parameters = new SimulationParameters
@@ -187,27 +485,58 @@ else
             };
 
             var seed = Config.GetValue("Simulation:DefaultSeed", 42);
-            var batch = await Sims.RunBatchAsync(twinId, selected, parameters, _runCount, seed, progress);
+            var batch = await Sims.RunBatchAsync(twinId, selected, parameters, _runCount, seed, statusProgress, runProgress);
+
             State.LastBatchId = batch.Id;
             Snackbar.Add($"Complete — mean R = {batch.Statistics?.MeanScore}", Severity.Success);
+
+            // Show final state before navigating
+            _statusMsg = $"Done — mean R = {batch.Statistics?.MeanScore}";
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(1200);
             Nav.NavigateTo("/results");
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Simulation batch failed");
-            _status = $"Failed: {ex.Message}";
+            _statusMsg = $"Failed: {ex.Message}";
             Snackbar.Add($"Simulation failed: {ex.Message}", Severity.Error);
             await InvokeAsync(StateHasChanged);
         }
         finally
         {
             _busy = false;
-            if (!_status.StartsWith("Failed"))
-                _status = "";
             await InvokeAsync(StateHasChanged);
         }
     }
 
+    // ── Live map helpers ───────────────────────────────────────────────────
+    private static Dictionary<Guid, string> BuildNodeStates(IReadOnlyList<SimulatedEvent> events)
+    {
+        var states = new Dictionary<Guid, string>();
+        foreach (var e in events)
+            if (e.NodeId.HasValue)
+                states[e.NodeId.Value] = e.Outcome.ToLowerInvariant();
+        return states;
+    }
+
+    private string LiveGetNodeState(Guid id) =>
+        _liveNodeStates.TryGetValue(id, out var s) ? s : "normal";
+
+    private bool LiveIsCompromised(Guid id) { var s = LiveGetNodeState(id); return s is "foothold" or "compromised"; }
+    private bool LiveIsIsolated(Guid id) => LiveGetNodeState(id) == "isolated";
+
+    private static string ScoreColor(decimal score) => score switch
+    {
+        >= 70 => "#81c784",
+        >= 40 => "#ffb300",
+        _ => "#ef5350"
+    };
+
+    private static string LiveTruncate(string v, int max) =>
+        v.Length <= max ? v : v[..max];
+
+    // ── Inner types ────────────────────────────────────────────────────────
     private sealed class ScenarioSelection
     {
         public ScenarioDefinition Definition { get; init; } = null!;

@@ -16,6 +16,7 @@ public sealed class SimulationBatchOrchestrator
         SimulationParameters parameters,
         int runCount,
         int seed,
+        IProgress<SimulationRunResult>? runProgress = null,
         CancellationToken cancellationToken = default)
     {
         var selected = scenarios
@@ -44,6 +45,7 @@ public sealed class SimulationBatchOrchestrator
             var scenario = selected[i % selected.Count];
             var result = _engine.ExecuteRun(twin, scenario, parameters, i, random);
             results.Add(result);
+            runProgress?.Report(result);
 
             if (i % 50 == 0)
                 await Task.Yield();

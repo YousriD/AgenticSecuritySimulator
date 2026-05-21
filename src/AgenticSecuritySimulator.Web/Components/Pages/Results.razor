@@ -4,110 +4,475 @@
 @inject AppState State
 @using System.Text.Json
 
-<PageTitle>Results</PageTitle>
+<PageTitle>Security Resilience Report</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">Resilience results</MudText>
-
-@if (State.LastBatchId is not Guid batchId)
+@if (State.LastBatchId is not Guid)
 {
-    <MudAlert Severity="Severity.Info">Run a simulation from the <MudLink Href="/scenarios">Scenarios</MudLink> page.</MudAlert>
+    <MudAlert Severity="Severity.Info" Class="ma-4">
+        Run a simulation from the <MudLink Href="/scenarios">Scenarios</MudLink> page first.
+    </MudAlert>
 }
 else if (_batch is null)
 {
-    <MudProgressCircular Indeterminate="true" />
+    <MudStack AlignItems="AlignItems.Center" Class="mt-10">
+        <MudProgressCircular Indeterminate="true" Size="Size.Large" Color="Color.Primary" />
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-3">Loading results…</MudText>
+    </MudStack>
 }
 else
 {
     var stats = _batch.Statistics;
-    <MudGrid>
-        <MudItem xs="12" md="3">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.overline">Mean R</MudText>
-                <MudText Typo="Typo.h3">@stats?.MeanScore</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="6" md="3">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.overline">P10</MudText>
-                <MudText Typo="Typo.h4">@stats?.P10Score</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="6" md="3">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.overline">P90</MudText>
-                <MudText Typo="Typo.h4">@stats?.P90Score</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="12" md="3">
-            <MudPaper Class="pa-4">
-                <MudText Typo="Typo.overline">Weakest dimension</MudText>
-                <MudText Typo="Typo.h5">@stats?.WeakestDimension</MudText>
-                <MudText Typo="Typo.caption">@stats?.WeakestDimensionPct% of runs</MudText>
-            </MudPaper>
-        </MudItem>
+    var mean  = stats?.MeanScore ?? 0;
+    var rating = GetRating(mean);
+
+    <!-- ══════════════════════════════════════════════════════════
+         SECTION 1 — Executive verdict
+         ══════════════════════════════════════════════════════════ -->
+    <MudPaper Class="pa-6 mb-4" Style="@($"background:{rating.BgColor}; border:2px solid {rating.BorderColor};")">
+        <MudGrid>
+            <MudItem xs="12" md="8">
+                <MudText Typo="Typo.overline" Style="@($"color:{rating.BorderColor}; letter-spacing:2px;")">
+                    SECURITY RESILIENCE ASSESSMENT
+                </MudText>
+                <MudText Typo="Typo.h3" Style="@($"color:{rating.TextColor}; font-weight:700; margin:4px 0 8px;")">
+                    @rating.Label
+                </MudText>
+                <MudText Typo="Typo.body1" Style="color:#ddd; line-height:1.6;">
+                    @rating.Summary
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color:#aaa; margin-top:8px;">
+                    Based on <strong style="color:#fff;">@_totalRuns simulated attacks</strong>
+                    across <strong style="color:#fff;">@_scenarioNames</strong>.
+                    In the worst 10% of scenarios, your resilience score dropped to
+                    <strong style="color:@(stats?.P10Score < 40 ? "#ef5350" : "#ffb300");">@stats?.P10Score</strong>.
+                </MudText>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <!-- Score gauge -->
+                <MudStack AlignItems="AlignItems.Center">
+                    <div style="position:relative; width:160px; height:160px;">
+                        <svg viewBox="0 0 160 160" width="160" height="160">
+                            <!-- Background arc -->
+                            <path d="M 20 120 A 70 70 0 1 1 140 120" fill="none" stroke="#333" stroke-width="14" stroke-linecap="round"/>
+                            <!-- Score arc -->
+                            <path d="M 20 120 A 70 70 0 1 1 140 120" fill="none"
+                                  stroke="@rating.BorderColor" stroke-width="14" stroke-linecap="round"
+                                  stroke-dasharray="@GaugeDash(mean)" />
+                            <!-- Score text -->
+                            <text x="80" y="88" text-anchor="middle" fill="@rating.TextColor"
+                                  font-size="32" font-weight="bold" font-family="sans-serif">@mean.ToString("F0")</text>
+                            <text x="80" y="108" text-anchor="middle" fill="#888"
+                                  font-size="11" font-family="sans-serif">out of 100</text>
+                        </svg>
+                    </div>
+                    <MudChip T="string" Style="@($"background:{rating.BorderColor}20; color:{rating.TextColor}; border:1px solid {rating.BorderColor}; font-weight:600;")" Size="Size.Medium">
+                        @rating.Label
+                    </MudChip>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <!-- ══════════════════════════════════════════════════════════
+         SECTION 2 — What this means in plain English
+         ══════════════════════════════════════════════════════════ -->
+    <MudText Typo="Typo.h5" Class="mb-3">What does this mean for your organisation?</MudText>
+    <MudGrid Spacing="3" Class="mb-5">
+        @foreach (var card in BusinessCards(stats, mean))
+        {
+            <MudItem xs="12" sm="6" md="4">
+                <MudPaper Class="pa-4" Style="@($"background:#1a1a2e; border-left:4px solid {card.AccentColor}; height:100%;")">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                        <MudIcon Icon="@card.Icon" Style="@($"color:{card.AccentColor};")" Size="Size.Medium" />
+                        <MudText Typo="Typo.subtitle1" Style="font-weight:600;">@card.Title</MudText>
+                    </MudStack>
+                    <MudText Typo="Typo.body2" Style="color:#ccc; line-height:1.6;">@card.Body</MudText>
+                    @if (!string.IsNullOrEmpty(card.Metric))
+                    {
+                        <MudChip T="string" Size="Size.Small" Style="@($"margin-top:10px; background:{card.AccentColor}22; color:{card.AccentColor}; border:1px solid {card.AccentColor}44;")" Variant="Variant.Outlined">
+                            @card.Metric
+                        </MudChip>
+                    }
+                </MudPaper>
+            </MudItem>
+        }
     </MudGrid>
 
-    <MudText Typo="Typo.h6" Class="mt-4">Score distribution (@_totalRuns runs)</MudText>
-    @if (_chartSeries.Count > 0)
+    <!-- ══════════════════════════════════════════════════════════
+         SECTION 3 — Top priority actions
+         ══════════════════════════════════════════════════════════ -->
+    @if (_medianScoreDetail is not null)
     {
-        <MudChart ChartType="ChartType.Bar" ChartSeries="@_chartSeries" x-axis-labels="@_chartLabels" Width="100%" Height="280px" />
+        var actions = PriorityActions(stats, _medianScoreDetail);
+        @if (actions.Any())
+        {
+            <MudText Typo="Typo.h5" Class="mb-3">🎯 Top Priority Actions</MudText>
+            <MudPaper Class="pa-4 mb-5" Style="background:#1a1a2e; border:1px solid #2d2d4e;">
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                    These are the highest-impact improvements your security team should focus on first,
+                    based on where your organisation failed most often across all simulated attacks.
+                </MudText>
+                @{ var rank = 1; }
+                @foreach (var action in actions)
+                {
+                    <MudPaper Class="pa-3 mb-2" Style="@($"background:#111127; border-left:3px solid {action.Color};")">
+                        <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="3">
+                            <div style="@($"min-width:28px; height:28px; border-radius:50%; background:{action.Color}; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; color:#000; flex-shrink:0;")">
+                                @rank
+                            </div>
+                            <div>
+                                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">@action.Title</MudText>
+                                <MudText Typo="Typo.body2" Style="color:#bbb; margin-top:2px;">@action.Detail</MudText>
+                            </div>
+                        </MudStack>
+                    </MudPaper>
+                    rank++;
+                }
+            </MudPaper>
+        }
     }
 
-    <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary" Href="/replay">View replay</MudButton>
+    <!-- ══════════════════════════════════════════════════════════
+         SECTION 4 — Technical detail (collapsed by default)
+         ══════════════════════════════════════════════════════════ -->
+    <MudExpansionPanels Class="mb-5">
+        <MudExpansionPanel>
+            <TitleContent>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Filled.Analytics" Color="Color.Secondary" Size="Size.Small" />
+                    <MudText Typo="Typo.subtitle1">Technical Detail — for the security team</MudText>
+                </MudStack>
+            </TitleContent>
+            <ChildContent>
+                <!-- KPI row -->
+                <MudGrid Spacing="2" Class="mb-4 mt-2">
+                    <MudItem xs="6" sm="3">
+                        <MudPaper Class="pa-3 text-center" Style="background:#111127;">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">Mean R</MudText>
+                            <MudText Typo="Typo.h4" Style="@ScoreTextStyle(mean)">@mean</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudPaper Class="pa-3 text-center" Style="background:#111127;">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">P10 (worst 10%)</MudText>
+                            <MudText Typo="Typo.h4" Color="Color.Error">@stats?.P10Score</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudPaper Class="pa-3 text-center" Style="background:#111127;">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">P90 (best 10%)</MudText>
+                            <MudText Typo="Typo.h4" Color="Color.Success">@stats?.P90Score</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudPaper Class="pa-3 text-center" Style="background:#111127;">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">Runs</MudText>
+                            <MudText Typo="Typo.h4" Color="Color.Default">@_totalRuns</MudText>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+
+                <!-- Dimension bars -->
+                @if (_medianScoreDetail is not null)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Dimension Scores (median run)</MudText>
+                    <MudGrid Spacing="3" Class="mb-3">
+                        @foreach (var (label, value, color, techDesc) in DimensionRows())
+                        {
+                            <MudItem xs="12" sm="6">
+                                <MudStack Spacing="0">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText Typo="Typo.body2" Style="font-weight:600;">@label</MudText>
+                                        <MudText Typo="Typo.body2" Color="@color">@value.ToString("F1") / 100</MudText>
+                                    </MudStack>
+                                    <MudProgressLinear Value="@((double)value)" Color="@color" Rounded="true" Size="Size.Medium" Class="my-1" />
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@techDesc</MudText>
+                                </MudStack>
+                            </MudItem>
+                        }
+                    </MudGrid>
+                }
+
+                <!-- Histogram -->
+                @if (_chartSeries.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Score distribution across all runs</MudText>
+                    <MudChart ChartType="ChartType.Bar" ChartSeries="@_chartSeries"
+                              x-axis-labels="@_chartLabels" Width="100%" Height="220px"
+                              ChartOptions="@_chartOptions" />
+                }
+            </ChildContent>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+
+    <!-- CTA -->
+    <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.PlayCircle" Href="/replay">
+            Watch Attack Replay
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.Refresh" Href="/scenarios">
+            Run New Simulation
+        </MudButton>
+    </MudStack>
 }
 
 @code {
     private AgenticSecuritySimulator.Core.Entities.SimulationBatch? _batch;
+    private AgenticSecuritySimulator.Core.Entities.ResilienceScoreDetail? _medianScoreDetail;
     private List<ChartSeries<double>> _chartSeries = [];
     private string[] _chartLabels = [];
     private int _totalRuns;
+    private string _scenarioNames = "";
+
+    private readonly ChartOptions _chartOptions = new()
+    {
+        ChartPalette = ["#ef5350", "#ff7043", "#ffa726", "#66bb6a", "#42a5f5"]
+    };
 
     protected override async Task OnInitializedAsync()
     {
-        if (State.LastBatchId is Guid batchId)
+        if (State.LastBatchId is not Guid batchId) return;
+
+        _batch = await Sims.GetBatchAsync(batchId);
+        _totalRuns = _batch?.RunCount ?? 0;
+
+        if (_batch is not null)
         {
-            _batch = await Sims.GetBatchAsync(batchId);
-            _totalRuns = _batch?.RunCount ?? 0;
+            // Scenario names for the summary sentence
+            try
+            {
+                var ids = JsonSerializer.Deserialize<List<string>>(_batch.ScenarioIdsJson ?? "[]") ?? [];
+                _scenarioNames = ids.Count > 0 ? string.Join(", ", ids) : "all scenarios";
+            }
+            catch { _scenarioNames = "selected scenarios"; }
+
             var scores = ExtractScores(_batch);
-            if (scores.Count > 0)
-                BuildChart(scores);
+            if (scores.Count > 0) BuildChart(scores);
+
+            var medianRun = _batch.Runs
+                .Where(r => r.ResilienceScore.HasValue)
+                .OrderBy(r => r.ResilienceScore)
+                .ElementAtOrDefault(_batch.Runs.Count / 2);
+
+            _medianScoreDetail = medianRun?.ScoreDetail;
         }
+    }
+
+    // ── Rating ─────────────────────────────────────────────────────────────
+    private sealed record RatingInfo(
+        string Label, string Summary,
+        string TextColor, string BorderColor, string BgColor);
+
+    private static RatingInfo GetRating(decimal score) => score switch
+    {
+        >= 80 => new("Strong", 
+            "Your organisation demonstrated strong resistance across all simulated attack scenarios. Critical systems remained protected in the vast majority of cases, and your security controls responded effectively. This is a solid baseline — continue investing to maintain this posture.",
+            "#81c784", "#2e7d32", "#0d1f0d"),
+        >= 65 => new("Resilient",
+            "Your organisation showed good resilience overall. Most attacks were detected and contained before causing significant damage. There are specific areas where improvement would meaningfully reduce your risk exposure, particularly in the scenarios where scores dipped below average.",
+            "#aed581", "#558b2f", "#111a0a"),
+        >= 45 => new("Moderate — Action Needed",
+            "Your organisation has a partial security posture, but there are clear gaps that attackers could exploit. In a real incident, some critical systems would likely be compromised before your team could respond. The priority actions below should be addressed within the next 90 days.",
+            "#ffb300", "#f57f17", "#1e1800"),
+        >= 25 => new("At Risk — Urgent Attention Required",
+            "Your organisation is significantly exposed. Simulated attacks frequently reached critical systems before being detected or contained. Without targeted improvements, a real-world incident could result in major operational disruption, data loss, or regulatory consequences.",
+            "#ff7043", "#bf360c", "#1e0d00"),
+        _ => new("Critical — Immediate Action Required",
+            "Your organisation's current security posture is critically insufficient. In the majority of simulated attacks, critical systems were fully compromised with little or no effective defence. Immediate escalation and investment is required to avoid a potentially catastrophic security incident.",
+            "#ef5350", "#b71c1c", "#1e0000")
+    };
+
+    // ── Business cards ─────────────────────────────────────────────────────
+    private sealed record BusinessCard(string Icon, string Title, string Body, string AccentColor, string Metric);
+
+    private IEnumerable<BusinessCard> BusinessCards(
+        AgenticSecuritySimulator.Core.Entities.BatchStatistics? stats, decimal mean)
+    {
+        // Crown Jewel exposure
+        var blastPct = _medianScoreDetail is not null
+            ? (int)Math.Round(_medianScoreDetail.BlastRadius * 100)
+            : (int)Math.Round((1 - mean / 100) * 60);
+
+        yield return new(
+            Icons.Material.Filled.Shield,
+            "Critical Asset Protection",
+            blastPct <= 20
+                ? $"In a typical attack, only {blastPct}% of your infrastructure was compromised. Your most important systems — payroll, identity, and core applications — were largely protected."
+                : blastPct <= 50
+                    ? $"In a typical attack, around {blastPct}% of your infrastructure was reached by the attacker. Some critical systems were exposed before defences kicked in."
+                    : $"In a typical attack, {blastPct}% of your infrastructure was compromised — including systems that are critical to your operations. This represents a high-impact risk.",
+            blastPct <= 20 ? "#2e7d32" : blastPct <= 50 ? "#f57f17" : "#c62828",
+            $"{blastPct}% of systems reached by attacker"
+        );
+
+        // Detection speed
+        var detScore = _medianScoreDetail?.Detection ?? (mean / 100m);
+        yield return new(
+            Icons.Material.Filled.Visibility,
+            "How Quickly Threats Were Spotted",
+            detScore >= 0.7m
+                ? "Your security monitoring detected most attacks quickly, giving your team time to respond before significant damage occurred. This is one of your strongest defences."
+                : detScore >= 0.4m
+                    ? "Threats were detected in some cases, but not consistently fast enough. In several scenarios, attackers had already moved through your network before an alert was raised."
+                    : "Attackers were able to operate inside your network for extended periods without being detected. This is a critical gap — the longer an attacker goes unnoticed, the more damage they can cause.",
+            detScore >= 0.7m ? "#1e88e5" : detScore >= 0.4m ? "#f57f17" : "#c62828",
+            detScore >= 0.7m ? "Detection: Good" : detScore >= 0.4m ? "Detection: Needs improvement" : "Detection: Critical gap"
+        );
+
+        // Containment
+        var conScore = _medianScoreDetail?.Containment ?? (mean / 100m);
+        yield return new(
+            Icons.Material.Filled.Security,
+            "Stopping the Spread",
+            conScore >= 0.7m
+                ? "Once a threat was identified, your team was generally able to isolate it and prevent it from spreading to other systems. Your incident response processes are working."
+                : conScore >= 0.4m
+                    ? "Your team was able to contain some attacks, but in others the threat spread to additional systems before being stopped. Faster isolation procedures would reduce your exposure."
+                    : "Attacks frequently spread across multiple systems before being contained. This suggests your network segmentation or incident response speed needs significant improvement.",
+            conScore >= 0.7m ? "#43a047" : conScore >= 0.4m ? "#f57f17" : "#c62828",
+            conScore >= 0.7m ? "Containment: Good" : conScore >= 0.4m ? "Containment: Needs improvement" : "Containment: Critical gap"
+        );
+
+        // Recovery
+        var recScore = _medianScoreDetail?.Recovery ?? (mean / 100m);
+        yield return new(
+            Icons.Material.Filled.Restore,
+            "Getting Back to Normal",
+            recScore >= 0.7m
+                ? "Your backup and recovery processes performed well. In most scenarios, systems could be restored within acceptable timeframes, limiting the business impact of an attack."
+                : recScore >= 0.4m
+                    ? "Recovery was possible in most cases, but some scenarios revealed gaps in your backup coverage or restoration speed. A ransomware attack could cause prolonged downtime."
+                    : "Recovery from attacks was slow or incomplete in many scenarios. If a real ransomware attack occurred today, your organisation could face days or weeks of disruption.",
+            recScore >= 0.7m ? "#8e24aa" : recScore >= 0.4m ? "#f57f17" : "#c62828",
+            recScore >= 0.7m ? "Recovery: Good" : recScore >= 0.4m ? "Recovery: Needs improvement" : "Recovery: Critical gap"
+        );
+
+        // Variability / consistency
+        var spread = (stats?.P90Score ?? mean) - (stats?.P10Score ?? mean);
+        yield return new(
+            Icons.Material.Filled.BarChart,
+            "Consistency of Your Defences",
+            spread <= 20
+                ? "Your security posture is consistent — results were similar across all attack types and scenarios. This predictability is valuable: you know what to expect and can plan accordingly."
+                : spread <= 40
+                    ? $"There is moderate variability in your results (range: {stats?.P10Score} to {stats?.P90Score}). Your defences work well against some attack types but are weaker against others."
+                    : $"Your results varied significantly across scenarios (range: {stats?.P10Score} to {stats?.P90Score}). Some attack types expose major weaknesses that others do not. This unpredictability is itself a risk.",
+            spread <= 20 ? "#00acc1" : spread <= 40 ? "#f57f17" : "#c62828",
+            $"Score range: {stats?.P10Score} – {stats?.P90Score}"
+        );
+
+        // Overall risk posture
+        yield return new(
+            Icons.Material.Filled.GppMaybe,
+            "Overall Risk to the Business",
+            mean >= 65
+                ? "Based on these simulations, your organisation is in a defensible position. A real attack would be disruptive, but your controls would limit the damage. Focus on the priority actions to move from resilient to strong."
+                : mean >= 40
+                    ? "Your organisation faces meaningful risk from a sophisticated attack. The gaps identified in these simulations represent real pathways an attacker could exploit. Addressing the priority actions below would materially reduce your exposure."
+                    : "Your organisation faces high risk from a targeted attack. The simulation results indicate that current controls are insufficient to prevent significant damage. Executive-level prioritisation of security investment is recommended.",
+            mean >= 65 ? "#2e7d32" : mean >= 40 ? "#f57f17" : "#c62828",
+            mean >= 65 ? "Risk level: Managed" : mean >= 40 ? "Risk level: Elevated" : "Risk level: High"
+        );
+    }
+
+    // ── Priority actions ───────────────────────────────────────────────────
+    private sealed record PriorityAction(string Title, string Detail, string Color);
+
+    private IEnumerable<PriorityAction> PriorityActions(
+        AgenticSecuritySimulator.Core.Entities.BatchStatistics? stats,
+        AgenticSecuritySimulator.Core.Entities.ResilienceScoreDetail detail)
+    {
+        var actions = new List<(decimal Score, PriorityAction Action)>();
+
+        if (detail.Detection < 0.6m)
+            actions.Add((detail.Detection, new(
+                "Deploy or tune your Security Information and Event Management (SIEM) system",
+                "Your detection times were too slow. Invest in 24/7 monitoring, automated alerting, and ensure your SOC team has clear escalation procedures. Target: detect threats within 1 hour of initial access.",
+                "#1e88e5")));
+
+        if (detail.Containment < 0.6m)
+            actions.Add((detail.Containment, new(
+                "Implement network micro-segmentation and automated isolation",
+                "Once attackers gained a foothold, they spread too easily. Segment your network so that a compromised workstation cannot directly reach your servers. Automate isolation of suspicious endpoints.",
+                "#43a047")));
+
+        if (detail.Recovery < 0.6m)
+            actions.Add((detail.Recovery, new(
+                "Test and harden your backup and disaster recovery plan",
+                "Recovery from attacks was too slow or incomplete. Ensure all critical systems have tested, offline backups. Run a tabletop exercise to validate your recovery time objectives (RTO) are achievable.",
+                "#8e24aa")));
+
+        if (detail.BlastRadius > 0.5m)
+            actions.Add((1 - detail.BlastRadius, new(
+                "Reduce the attack surface by hardening your most critical assets",
+                "Too many systems were reachable once an attacker gained initial access. Apply the principle of least privilege, remove unnecessary network paths, and prioritise patching on Crown Jewel systems.",
+                "#f57f17")));
+
+        if (detail.Availability < 0.6m)
+            actions.Add((detail.Availability, new(
+                "Protect your Crown Jewel systems with additional access controls",
+                "Critical systems — such as your domain controller, payroll server, and core applications — were compromised in too many scenarios. Implement privileged access workstations (PAW) and multi-factor authentication on all administrative access.",
+                "#c62828")));
+
+        if (stats is not null && stats.P10Score < 30)
+            actions.Add((stats.P10Score / 100, new(
+                "Address your worst-case scenario exposure",
+                $"In the worst 10% of simulated attacks, your resilience score fell to {stats.P10Score}. This tail risk represents scenarios where multiple controls fail simultaneously. Conduct a red team exercise to understand and close these gaps.",
+                "#ff7043")));
+
+        // Return top 3 by lowest score (most urgent first)
+        return actions.OrderBy(a => a.Score).Take(3).Select(a => a.Action);
+    }
+
+    // ── Technical helpers ──────────────────────────────────────────────────
+    private IEnumerable<(string Label, decimal Value, Color Color, string TechDesc)> DimensionRows()
+    {
+        if (_medianScoreDetail is null) yield break;
+        yield return ("Availability",   _medianScoreDetail.Availability  * 100, Color.Success,   "Ratio of Crown Jewel nodes that remained uncompromised");
+        yield return ("Detection",      _medianScoreDetail.Detection     * 100, Color.Info,      "Mean Time to Detect (MTTD) vs. SLO target");
+        yield return ("Containment",    _medianScoreDetail.Containment   * 100, Color.Primary,   "Mean Time to Contain (MTTC) vs. SLO target");
+        yield return ("Recovery",       _medianScoreDetail.Recovery      * 100, Color.Secondary, "Backup RPO/RTO adherence");
+        yield return ("Blast Radius ↓", (1 - _medianScoreDetail.BlastRadius) * 100, Color.Error, "Inverted blast radius — lower spread = higher score");
+    }
+
+    private static string GaugeDash(decimal score)
+    {
+        // Arc total length ≈ 220 (half-circle + a bit)
+        const double arcLen = 220.0;
+        var filled = (double)score / 100.0 * arcLen;
+        return $"{filled:F1} {arcLen:F1}";
     }
 
     private static List<decimal> ExtractScores(AgenticSecuritySimulator.Core.Entities.SimulationBatch? batch)
     {
-        if (batch?.Statistics?.StatsJson is not { } json)
-            return batch?.Runs.Select(r => r.ResilienceScore ?? 0).ToList() ?? [];
-
-        try
+        if (batch?.Statistics?.StatsJson is { } json)
         {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("Scores", out var arr))
-                return arr.EnumerateArray().Select(e => e.GetDecimal()).ToList();
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("Scores", out var arr))
+                    return arr.EnumerateArray().Select(e => e.GetDecimal()).ToList();
+            }
+            catch { }
         }
-        catch { }
-
-        return batch.Runs.Select(r => r.ResilienceScore ?? 0).ToList();
+        return batch?.Runs.Select(r => r.ResilienceScore ?? 0).ToList() ?? [];
     }
 
     private void BuildChart(List<decimal> scores)
     {
-        var buckets = new[] { "0-20", "21-40", "41-60", "61-80", "81-100" };
+        _chartLabels = ["0–20", "21–40", "41–60", "61–80", "81–100"];
         var counts = new int[5];
-        foreach (var score in scores)
-        {
-            var idx = score switch
-            {
-                <= 20 => 0,
-                <= 40 => 1,
-                <= 60 => 2,
-                <= 80 => 3,
-                _ => 4
-            };
-            counts[idx]++;
-        }
-
-        _chartLabels = buckets;
+        foreach (var s in scores)
+            counts[s switch { <= 20 => 0, <= 40 => 1, <= 60 => 2, <= 80 => 3, _ => 4 }]++;
         _chartSeries = [new ChartSeries<double> { Name = "Runs", Data = counts.Select(c => (double)c).ToArray() }];
     }
+
+    private static string ScoreTextStyle(decimal score) => score switch
+    {
+        >= 65 => "color:#81c784;",
+        >= 45 => "color:#ffb300;",
+        _ => "color:#ef5350;"
+    };
 }

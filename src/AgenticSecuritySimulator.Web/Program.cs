@@ -5,6 +5,7 @@ using AgenticSecuritySimulator.Simulation;
 using AgenticSecuritySimulator.Web.Api;
 using AgenticSecuritySimulator.Web.Components;
 using AgenticSecuritySimulator.Web.Data;
+using AgenticSecuritySimulator.Web.Hubs;
 using AgenticSecuritySimulator.Web.Services;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
@@ -38,6 +39,7 @@ builder.Services.AddSingleton<TopologyLayoutService>();
 builder.Services.AddSingleton<SimulationBatchOrchestrator>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IAiSettingProvider, DbAiSettingProvider>();
+builder.Services.AddSingleton<ReplayStateService>();
 builder.Services.AddSimulationAgents(useAiPlanners: false);
 
 var app = builder.Build();
@@ -56,6 +58,7 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapTwinEndpoints();
+app.MapHub<ReplayHub>("/hubs/replay");
 
 app.Run();
 

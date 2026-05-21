@@ -1,6 +1,7 @@
 using AgenticSecuritySimulator.Core.Entities;
 using AgenticSecuritySimulator.Core.Models;
 using AgenticSecuritySimulator.Core.Scenarios;
+using AgenticSecuritySimulator.Simulation;
 using AgenticSecuritySimulator.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -53,8 +54,9 @@ public sealed class SimulationService(
         int runCount,
         int seed,
         IProgress<string>? progress = null,
+        IProgress<SimulationRunResult>? runProgress = null,
         CancellationToken ct = default) =>
-        batchRunner.RunAsync(twinId, scenarioIds, parameters, runCount, seed, progress, ct);
+        batchRunner.RunAsync(twinId, scenarioIds, parameters, runCount, seed, progress, runProgress, ct);
 
     public Task<SimulationBatch?> GetBatchAsync(Guid batchId, CancellationToken ct = default) =>
         db.SimulationBatches
