@@ -140,3 +140,17 @@ BEGIN
     );
 END
 GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AiProviderSettings')
+BEGIN
+    CREATE TABLE AiProviderSettings (
+        Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY DEFAULT NEWID(),
+        ProviderType NVARCHAR(64) NOT NULL,
+        DisplayName NVARCHAR(256) NOT NULL,
+        Endpoint NVARCHAR(512) NOT NULL,
+        ModelName NVARCHAR(256) NOT NULL,
+        ApiKey NVARCHAR(512) NULL,
+        IsActive BIT NOT NULL DEFAULT 0
+    );
+END
+GO

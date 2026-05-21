@@ -150,7 +150,16 @@
 
     private async Task LoadProvidersAsync()
     {
-        _providers = await Db.AiProviderSettings.OrderBy(p => p.DisplayName).ToListAsync();
+        try
+        {
+            _providers = await Db.AiProviderSettings.OrderBy(p => p.DisplayName).ToListAsync();
+        }
+        catch (Exception)
+        {
+            // Table may not exist yet on SQL Server — show empty list until schema is applied
+            _providers = [];
+            Snackbar.Add("AI provider table not found. Run database/scripts/001_CreateSchema.sql against your SQL Server instance.", Severity.Warning);
+        }
     }
 
     private void OnProviderChanged()

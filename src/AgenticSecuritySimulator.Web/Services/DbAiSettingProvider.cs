@@ -15,10 +15,18 @@ public sealed class DbAiSettingProvider : IAiSettingProvider
 
     public async Task<AiProviderSetting?> GetActiveSettingAsync(CancellationToken cancellationToken = default)
     {
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.AiProviderSettings
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.IsActive, cancellationToken);
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            return await db.AiProviderSettings
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.IsActive, cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Table may not exist yet on SQL Server before migration runs — return null (POC/rule-based mode)
+            return null;
+        }
     }
 }
